@@ -27,8 +27,8 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from dqs.contracts.profiler import (
-    ColumnAggregate,
     SYSTEM_COLUMNS,
+    ColumnAggregate,
     TableProfile,
     _fk_columns_for_table,
 )
@@ -52,7 +52,8 @@ VOLUME_MIN_SHARE: Final = 0.6
 VOLUME_MAX_SHARE: Final = 1.5
 PRODUCTS_MAX_SHARE: Final = 0.1
 FK_COVERAGE: Final = 0.99  # §7.2: infer a reference only at ≥99% resolved joins
-FK_ORPHAN_TOLERANCE: Final = 1.0 - FK_COVERAGE
+FK_ORPHAN_TOLERANCE: Final = 0.01
+_STD_EPS: Final = 1e-9  # σ below this is "flat" → mean-bounds fallback applies
 ALLOWED_VALUES_COVERAGE: Final = 0.995  # §7.2: ≥99.5% of values covered
 PRODUCTS_TABLE: Final = "products"
 DIMENSION_TABLES: Final[frozenset[str]] = frozenset({"products", "customers"})
@@ -191,15 +192,16 @@ def _range_bounds(aggregate: ColumnAggregate) -> NumericRange | None:
 
 
 def _mean_bounds(aggregate: ColumnAggregate) -> NumericRange | None:
-    """Per-batch mean window: μ ± 4·σ, or ±25% when the window is too small."""
+    """Per-batch mean window: μ ± 4·σ, or ±25% when σ≈0 or the window is too small."""
     means = aggregate.batch_means
     if not means:
         return None
     center = sum(means) / len(means)
-    if len(means) >= 2:
-        variance = sum((value - center) ** 2 for value in means) / len(means)
-        spread = MEAN_STD_MULT * math.sqrt(variance)
-    else:
+    variance = sum((value - center) ** 2 for value in means) / len(means)
+    sigma = math.sqrt(variance) if len(means) >= 2 else 0.0
+    if sigma > _STD_EPS:  # enough spread to trust the batch-mean distribution
+        spread = MEAN_STD_MULT * sigma
+    else:  # §7.2 fallback: a single observation (or a flat one) hides σ
         spread = MEAN_FALLBACK_SHARE * center
     low = center - spread
     if center >= 0:  # means of amounts/quantities stay non-negative here

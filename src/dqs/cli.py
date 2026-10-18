@@ -222,9 +222,7 @@ def show(
         if spec.mean_bounds is not None:
             flags.append(f"mean={spec.mean_bounds.min}..{spec.mean_bounds.max}")
         null = "nullable" if spec.nullable else "not-null"
-        console.print(
-            f"  {name}: {spec.logical_type.value} {null} {' '.join(flags)}", markup=False
-        )
+        console.print(f"  {name}: {spec.logical_type.value} {null} {' '.join(flags)}", markup=False)
     pk = ",".join(contract.primary_key) or "-"
     console.print(
         f"  volume {contract.volume.min_rows}..{contract.volume.max_rows} "
