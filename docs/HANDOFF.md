@@ -1,37 +1,40 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-18 · Do not treat this file as a spec; AGENTS.md is rules,
+Last updated: 2026-10-19 · Do not treat this file as a spec; AGENTS.md is rules,
 docs/PHASES.md is order, docs/ARCHITECTURE.md is design.
 
 ## Current state
 
-- **Phase 2a, task 1 (faults) is complete, tested, and committed.** Review
-  packet from the mid-phase check: `docs/review/phase-2a-review.md` (its FAIL
-  rows are now mostly closed — see below). **Task 2 (contracts) NOT started.**
+- **Phase 2a is complete (both tasks) and ready for review.** Phase report:
+  `docs/phase-notes/phase-2a.md`. Mid-phase review packet's FAIL rows are all
+  closed. **Do not start Phase 2b** (check engine) until the owner says so.
 - Faults today: `sim/faults.py` with ONE injection registry covering all ten
   kinds (`set(_INJECTORS) == set(FaultKind)` is tested), parser validates
   empty-params (`kind:table:` is an error) and orphan_keys FK pairs (`FK_MAP`,
   parse-time, F5 ids strictly above the cumulative parent max), F10 adds
-  coupon-like text + nulls (DECISIONS 27–32 describe every shape decision).
-  `sim day --fault` is repeatable (`Annotated[list[str]|None, typer.Option]`).
-- Tests: unit **63 passed**, integration **14 passed** (10 Phase-1 + 4 new
-  fault e2e in `tests/integration/test_faults_e2e.py` — they create/drop DB
-  `dqs_test`, never touch the dev warehouse; unique basenames matter:
-  test files must not share `test_faults` naming).
-- Known leftovers inside task 1: CLI `--fault` parsing uses the Annotated
-  syntax (works, verified via a probe but not covered by a pytest); nothing
-  else known.
-- **Not started (Phase 2 task 2):** `contracts/profiler.py|generator.py|
-  store.py` are placeholder stubs; the 13 contract YAMLs, `dqs contracts
-  generate|show|approve`, the contract-determinism test, the unknown-key
-  test, and the held-out fit test (clean days 2026-01-31…2026-02-04) are all
-  missing. F5 decisions for `contracts` from the review packet's risk list
-  (dimension volume day-1 exclusion, expanding-key range semantics).
-- **Warehouse state right now:** Docker Postgres up, exactly
-  `dqs db reset && dqs sim seed --days 30` — 30 batches
-  (`batch_20260101`…`batch_20260130`), all dbt builds `success` in
-  `dq.pipeline_runs`, no 2026-01-31+ batches. That is also the contract
-  baseline Phase 2 needs.
+  coupon-like text + nulls (DECISIONS 27–32).
+- Contracts today: `contracts/parsing.py` (shared TEXT→type parsing),
+  `contracts/profiler.py` (raw per-batch + staged snapshot, orphan anti-joins)
+  and `contracts/generator.py` (§7.2 thresholds), `contracts/store.py`
+  (deterministic YAML, strict load, approve), `contracts/generation.py`
+  (one-pass `generate_all`), `contracts/fitting.py` (fit/sensitivity HARNESS
+  only — thresholds are exported there for the check engine; it is NOT the
+  check engine). CLI: `dqs contracts generate|show|approve`. The 13 contract
+  YAMLs live in `contracts/`, `status: draft` (owner approves them).
+- Tests: **170 passed** = 140 unit + 30 integration. New integration files
+  (both create/drop DB `dqs_test`, NEVER touch the dev warehouse):
+  `test_faults_e2e.py` (4) and `test_contracts_e2e.py` (16 — held-out fit on
+  clean 2026-01-31…02-04, fault sensitivity F1–F7/F9/F10, FK_MAP match, catalog
+  validation, unknown-key rejection, dev-warehouse regen byte-identity).
+  Unique basenames among integration test files matter.
+- Warehouse state right now: exactly the clean contract baseline — 30 batches
+  (`batch_20260101`…`batch_20260130`) in `dq.batches`, max business_date
+  2026-01-30, no 2026-01-31+ batches. Generating contracts against it
+  reproduces the committed files byte-for-byte (tested).
+- Phase-2b hooks already decided (DECISIONS 33–43): bounds on measures only;
+  dimension day-1 excluded from volume; `required_in_batch` only at 100%
+  baseline presence; freshness batch-level via `dq.batches.arrived_at`
+  (F8 is stat-invisible); staged contracts are snapshots (`batches: 1`).
 - Repo is at `D:\study\python\data steward` (git `main`, remote: none).
 - `.env` exists locally (copy of `.env.example`), is **gitignored, never commit it**.
 
@@ -140,14 +143,14 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   exception; they adjust metadata). ✅ resolved in 2a: `loader.load_batch` takes
   an optional `arrived_at` override and `pipeline.load_day(specs=…)` applies the
   faults; F8 returns that override (`dq.batches.arrived_at` + `_loaded_at` move,
-  frames don't). Still untested e2e.
+  frames don't). Tested e2e (task 1).
 - **Zero false positives is an acceptance criterion** — clean days
   2026-01-31…02-04 must produce 0 incidents. That's why clean-day generation
   (not the checks!) carries the burden: ranges/means/volume bounds come from the
   30-day baseline with headroom (§7.2 rules).
 - **Contract generation must be byte-identical across runs** (sort keys, stable
   float formatting) — this is enforced by `.gitattributes` LF normalization (see
-  DECISIONS 3) and tested in Phase 2 acceptance.
+  DECISIONS 3) and tested in Phase 2 acceptance (now enforced by `test_regenerated_contracts_are_byte_identical_to_committed`).
 - **`volume` for dimension tables excludes the initial-load batch** (customers
   day-1=2000 must not enter bounds); for products there are no non-initial
   batches — handle explicitly (don't crash on an empty histogram).
