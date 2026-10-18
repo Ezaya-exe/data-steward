@@ -104,3 +104,38 @@ entry each; newest last.
     defensive workaround, since faults must stay attributable.
 26. **`--seed` defaults to `DQS_SEED` from `Settings`** when the flag is
     omitted, keeping env-config and CLI flag consistent.
+
+## Phase 2a (2026-10-18)
+
+27. **All ten fault kinds share one injection registry** — uniform signature
+    `(tables, spec, rng, date, seed) -> (frames, arrival_override | None,
+    ground_truth)`; F8/F9 are registered injectors, not special cases in
+    `apply_faults`. Reason: a registry-completeness test
+    (`set(_INJECTORS) == set(FaultKind)`) makes it impossible for a kind the
+    parser accepts to fail at apply time (the original `KeyError` bug).
+28. **`FK_MAP` restricts orphan_keys at PARSE time** to the four structural FK
+    pairs (`orders.customer_id → customers`,
+
+    `order_items.order_id → orders`, `payments.order_id → orders`,
+    `order_items.product_id → products`); injected ids are strictly above the
+    parent's cumulative maximum (closed-form bound, e.g. next slot start), so
+    the FK violation is provable, not probabilistic. Rejected pairs fail in
+    the parser with the supported pairs listed.
+29. **null_spike rejects only the target table's primary-key column.** FK
+    columns stay valid targets: NULLing a nullable FK column is a realistic
+    upstream-nulls fault, and NULL is not an orphan (fk.integrity stays quiet
+    while nulls.rate fires).
+30. **`kind:table:` with an empty parameter list is a parse error.** A colon
+    announces parameters that never arrived — silent default behavior would
+    hide copy-paste truncation.
+31. **F10 `column_added` shape: one extra TEXT column of short coupon-like
+    codes (`SAVE10`, `SAVE20`, …) with ~30 % NULLs; default name
+    `orders.coupon_code`, `extra_note` elsewhere, overridable via
+    `new_column=`.** Reason: mirrors real upstream drift (new optional field,
+    partially populated) and stays warning-level; replaces the earlier draft
+    `new_name/value` parameters.
+32. **Fault-path integration tests use a throwaway database** (`dqs_test`,
+    created and dropped by the test fixture). Reason: a renamed header
+    ALTERs `raw.orders` — running that on the dev warehouse would pollute
+    exactly the schema evolution state contracts must be generated from; the
+    `dqs` role has CREATEDB, `WITH (FORCE)` drops need no extra setup.

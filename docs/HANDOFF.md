@@ -5,27 +5,28 @@ docs/PHASES.md is order, docs/ARCHITECTURE.md is design.
 
 ## Current state
 
-- **Phase 2a is mid-flight, NOT complete.** Review packet:
-  `docs/review/phase-2a-review.md` (honest PASS/FAIL per criterion).
-- Done + committed: **Phase 2 task 1 code** — `sim/faults.py` (parser +
-  F1–F9 injectors + ground truth), `models/enums.py`/`contract.py`/
-  `faults.py` (strict Pydantic), loader `arrived_at` override,
-  `pipeline.load_day(specs=…)`, CLI `sim day --fault` (repeatable). Commit
-  `c67b2e2`. `src/` is ruff+mypy clean.
-- **Known code bug (top of the next session):** `column_added` (F10) is
-  parsed and validated but has NO registered injector —
-  `apply_faults` raises `KeyError`. Grep `@register` in `sim/faults.py`.
-- **Uncommitted draft:** `tests/unit/test_faults.py` — never executed in-repo;
-  it has (a) two import errors (`from dqs import generator|faults` → must be
-  `dqs.sim.…`), (b) a wrong F5 positional-ordering assertion, (c) a
-  trailing-colon negative that current parser behavior deliberately treats as
-  "no params" (decide: reject or accept — log in DECISIONS), (d) 6 E501 lines.
-  Evaluated via a corrected temp copy: 28 passed / 6 failed.
-- **Not started (Phase 2 task 2 + check engine wiring out of scope for 2a):**
-  `contracts/profiler.py|generator.py|store.py` are placeholder stubs; 13
-  contract YAMLs, `dqs contracts generate|show|approve`, the skipped-day
-  purity test, contract-determinism test, unknown-key test and the held-out
-  fit test (clean days 2026-01-31…2026-02-04) are all missing.
+- **Phase 2a, task 1 (faults) is complete, tested, and committed.** Review
+  packet from the mid-phase check: `docs/review/phase-2a-review.md` (its FAIL
+  rows are now mostly closed — see below). **Task 2 (contracts) NOT started.**
+- Faults today: `sim/faults.py` with ONE injection registry covering all ten
+  kinds (`set(_INJECTORS) == set(FaultKind)` is tested), parser validates
+  empty-params (`kind:table:` is an error) and orphan_keys FK pairs (`FK_MAP`,
+  parse-time, F5 ids strictly above the cumulative parent max), F10 adds
+  coupon-like text + nulls (DECISIONS 27–32 describe every shape decision).
+  `sim day --fault` is repeatable (`Annotated[list[str]|None, typer.Option]`).
+- Tests: unit **63 passed**, integration **14 passed** (10 Phase-1 + 4 new
+  fault e2e in `tests/integration/test_faults_e2e.py` — they create/drop DB
+  `dqs_test`, never touch the dev warehouse; unique basenames matter:
+  test files must not share `test_faults` naming).
+- Known leftovers inside task 1: CLI `--fault` parsing uses the Annotated
+  syntax (works, verified via a probe but not covered by a pytest); nothing
+  else known.
+- **Not started (Phase 2 task 2):** `contracts/profiler.py|generator.py|
+  store.py` are placeholder stubs; the 13 contract YAMLs, `dqs contracts
+  generate|show|approve`, the contract-determinism test, the unknown-key
+  test, and the held-out fit test (clean days 2026-01-31…2026-02-04) are all
+  missing. F5 decisions for `contracts` from the review packet's risk list
+  (dimension volume day-1 exclusion, expanding-key range semantics).
 - **Warehouse state right now:** Docker Postgres up, exactly
   `dqs db reset && dqs sim seed --days 30` — 30 batches
   (`batch_20260101`…`batch_20260130`), all dbt builds `success` in
@@ -170,8 +171,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   defensive workaround — intentional).
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
-- `dqs sim day --fault` now exists (2a: injectors + CLI) but the e2e fault-load
-  integration tests and ALL of contracts (task 2 + `dqs contracts *`) are still missing.
+- `dqs sim day --fault` works (task 1 of 2a, tested e2e); contracts (task 2 +
+  `dqs contracts *`) and the check engine are still ahead.
 - `dq.publications` has no primary key by spec (§4.3) — idempotency is enforced
   in application code (Phase 6).
 - Windows console shows mojibake for some rich Unicode glyphs in dbt output —
