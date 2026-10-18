@@ -46,17 +46,17 @@ def generate_raw_contracts(engine: Engine) -> list[Contract]:
 
 
 def generate_staged_contracts(engine: Engine) -> list[Contract]:
-    """One contract per existing staging/marts base table (snapshot facts)."""
-    window = None
-    contracts: list[Contract] = []
-    for ref in profiler.discover_staged_tables(engine):
-        profile = profiler.profile_table_state(engine, ref)
-        if window is None:
-            window = window_of(profiler.list_batches(engine))
-        contracts.append(generate_contract(profile, window))
-    if window is None:
-        raise ContractError("dq.batches has no rows: seed the baseline first")
-    return contracts
+    """One per existing staging/marts base table ([] when dbt hasn't built any).
+
+    A warehouse before its first dbt build is a legitimate state (sim tests
+    load raw batches with ``run_dbt=False``), so zero staged tables is an
+    empty result, not an error — absence of batches is what raises.
+    """
+    refs = profiler.discover_staged_tables(engine)
+    if not refs:
+        return []
+    window = window_of(profiler.list_batches(engine))
+    return [generate_contract(profiler.profile_table_state(engine, ref), window) for ref in refs]
 
 
 def generate_all(engine: Engine) -> list[Contract]:
