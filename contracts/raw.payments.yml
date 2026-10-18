@@ -1,0 +1,49 @@
+baseline:
+  batches: 30
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 14590
+columns:
+  amount:
+    logical_type: numeric
+    mean_bounds:
+      max: 2635.245018
+      min: 2242.59675
+    nullable: false
+    range:
+      max: 6238.1125
+      min: 0.0
+    unique: false
+  method:
+    allowed_values:
+    - card
+    - cod
+    - netbanking
+    - upi
+    logical_type: string
+    nullable: false
+    unique: false
+  order_id:
+    logical_type: integer
+    nullable: false
+    references:
+      column: order_id
+      table: raw.orders
+    unique: false
+  payment_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: raw
+primary_key:
+- payment_id
+status: draft
+table: raw.payments
+volume:
+  max_rows: 918
+  min_rows: 253
+  required_in_batch: true

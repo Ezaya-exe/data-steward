@@ -1,0 +1,100 @@
+baseline:
+  batches: 1
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 13891
+columns:
+  customer_id:
+    logical_type: integer
+    nullable: false
+    unique: false
+  item_count:
+    allowed_values:
+    - '1'
+    - '2'
+    - '3'
+    - '4'
+    logical_type: integer
+    nullable: false
+    unique: false
+  item_qty:
+    allowed_values:
+    - '1'
+    - '2'
+    - '3'
+    - '4'
+    - '5'
+    - '6'
+    - '7'
+    - '8'
+    - '9'
+    - '10'
+    - '11'
+    - '12'
+    logical_type: integer
+    mean_bounds:
+      max: 6.289684
+      min: 3.77381
+    nullable: false
+    range:
+      max: 14.75
+      min: 0.0
+    unique: false
+  order_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+  order_ts:
+    logical_type: timestamp
+    nullable: false
+    unique: false
+  payment_count:
+    allowed_values:
+    - '1'
+    - '2'
+    logical_type: integer
+    nullable: false
+    unique: false
+  payment_total:
+    logical_type: numeric
+    mean_bounds:
+      max: 3200.710284
+      min: 1920.42617
+    nullable: false
+    range:
+      max: 6223.535
+      min: 0.0
+    unique: false
+  status:
+    allowed_values:
+    - cancelled
+    - delivered
+    - paid
+    - placed
+    - shipped
+    logical_type: string
+    nullable: false
+    unique: false
+  total_amount:
+    logical_type: numeric
+    mean_bounds:
+      max: 3200.710284
+      min: 1920.42617
+    nullable: false
+    range:
+      max: 6223.535
+      min: 0.0
+    unique: false
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: marts
+primary_key:
+- order_id
+status: draft
+table: marts.fct_orders
+volume:
+  max_rows: 20837
+  min_rows: 8334
+  required_in_batch: false

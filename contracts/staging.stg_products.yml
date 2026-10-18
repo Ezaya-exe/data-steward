@@ -1,0 +1,43 @@
+baseline:
+  batches: 1
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 200
+columns:
+  category:
+    allowed_values:
+    - apparel
+    - beauty
+    - electronics
+    - home
+    - toys
+    logical_type: string
+    nullable: false
+    unique: false
+  price:
+    logical_type: numeric
+    mean_bounds:
+      max: 2524.75625
+      min: 1514.85375
+    nullable: false
+    range:
+      max: 4999.49
+      min: 0.0
+    unique: true
+  product_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: staging
+primary_key:
+- product_id
+status: draft
+table: staging.stg_products
+volume:
+  max_rows: 300
+  min_rows: 120
+  required_in_batch: false

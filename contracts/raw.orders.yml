@@ -1,0 +1,54 @@
+baseline:
+  batches: 30
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 13891
+columns:
+  customer_id:
+    logical_type: integer
+    nullable: false
+    references:
+      column: customer_id
+      table: raw.customers
+    unique: false
+  order_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+  order_ts:
+    logical_type: timestamp
+    nullable: false
+    unique: false
+  status:
+    allowed_values:
+    - cancelled
+    - delivered
+    - paid
+    - placed
+    - shipped
+    logical_type: string
+    nullable: false
+    unique: false
+  total_amount:
+    logical_type: numeric
+    mean_bounds:
+      max: 2758.536098
+      min: 2362.65617
+    nullable: false
+    range:
+      max: 6223.535
+      min: 0.0
+    unique: false
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: raw
+primary_key:
+- order_id
+status: draft
+table: raw.orders
+volume:
+  max_rows: 867
+  min_rows: 242
+  required_in_batch: true

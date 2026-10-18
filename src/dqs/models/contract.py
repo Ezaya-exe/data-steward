@@ -42,10 +42,29 @@ class Baseline(_Strict):
 
 
 class ColumnReference(_Strict):
-    """Parent table/column of an inferred FK (§7.2 `references`)."""
+    """Parent table/column of an inferred FK (§7.2 `references`).
 
-    table: str
+    Both parts end up inside a SQL anti-join identifier position, so both are
+    validated with the same identifier regex the loader uses (not just trust).
+    """
+
+    table: str  # fully qualified, e.g. "raw.customers"
     column: str
+
+    @field_validator("table")
+    @classmethod
+    def _qualified(cls, value: str) -> str:
+        schema, _, name = value.partition(".")
+        if not name or not re.match(TABLE_NAME_RE, schema) or not re.match(TABLE_NAME_RE, name):
+            raise ValueError(f"reference table must be 'schema.table', got {value!r}")
+        return value
+
+    @field_validator("column")
+    @classmethod
+    def _identifier(cls, value: str) -> str:
+        if not re.match(TABLE_NAME_RE, value):
+            raise ValueError(f"reference column is not a valid identifier: {value!r}")
+        return value
 
 
 class NumericRange(_Strict):
@@ -76,10 +95,16 @@ class ColumnSpec(_Strict):
 
 
 class Volume(_Strict):
-    """Per-batch row-count window (§7.2)."""
+    """Row-count window (§7.2), with the kind of alert it should raise.
+
+    For raw tables `required_in_batch` means the table's header must appear in
+    every batch (F9 whole-header absence is then a violation even at 0 rows);
+    the generator derives it from how often the table appeared in the baseline.
+    """
 
     min_rows: int
     max_rows: int
+    required_in_batch: bool
 
 
 class Freshness(_Strict):

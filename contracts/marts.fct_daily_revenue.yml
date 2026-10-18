@@ -1,0 +1,46 @@
+baseline:
+  batches: 1
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 30
+columns:
+  collected:
+    logical_type: numeric
+    mean_bounds:
+      max: 1482035.551667
+      min: 889221.331
+    nullable: false
+    range:
+      max: 1622565.015
+      min: 916371.585
+    unique: true
+  order_date:
+    logical_type: date
+    nullable: false
+    unique: true
+  orders:
+    logical_type: integer
+    nullable: false
+    unique: false
+  revenue:
+    logical_type: numeric
+    mean_bounds:
+      max: 1482035.551667
+      min: 889221.331
+    nullable: false
+    range:
+      max: 1622565.015
+      min: 916371.585
+    unique: true
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: marts
+primary_key: []
+status: draft
+table: marts.fct_daily_revenue
+volume:
+  max_rows: 45
+  min_rows: 18
+  required_in_batch: false

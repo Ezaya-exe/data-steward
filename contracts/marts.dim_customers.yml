@@ -1,0 +1,73 @@
+baseline:
+  batches: 1
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 3161
+columns:
+  _first_loaded_at:
+    logical_type: timestamp
+    nullable: false
+    unique: false
+  _first_loaded_batch_id:
+    logical_type: string
+    nullable: false
+    unique: false
+  customer_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+  email:
+    logical_type: string
+    nullable: false
+    unique: true
+  last_order_ts:
+    logical_type: timestamp
+    max_null_rate: 0.122464
+    nullable: true
+    unique: false
+  order_count:
+    logical_type: integer
+    nullable: false
+    unique: false
+  signup_date:
+    logical_type: date
+    nullable: false
+    unique: false
+  state:
+    allowed_values:
+    - delhi
+    - gujarat
+    - karnataka
+    - kerala
+    - maharashtra
+    - rajasthan
+    - tamil_nadu
+    - telangana
+    - uttar_pradesh
+    - west_bengal
+    logical_type: string
+    nullable: false
+    unique: false
+  total_spend:
+    logical_type: numeric
+    mean_bounds:
+      max: 14065.506659
+      min: 8439.303996
+    nullable: false
+    range:
+      max: 65978.7125
+      min: 0.0
+    unique: false
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: marts
+primary_key:
+- customer_id
+status: draft
+table: marts.dim_customers
+volume:
+  max_rows: 4742
+  min_rows: 1896
+  required_in_batch: false

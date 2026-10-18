@@ -1,0 +1,55 @@
+baseline:
+  batches: 1
+  first: '2026-01-01'
+  last: '2026-01-30'
+  rows: 34845
+columns:
+  order_id:
+    logical_type: integer
+    nullable: false
+    unique: false
+  order_item_id:
+    logical_type: integer
+    nullable: false
+    unique: true
+  product_id:
+    logical_type: integer
+    nullable: false
+    unique: false
+  quantity:
+    allowed_values:
+    - '1'
+    - '2'
+    - '3'
+    logical_type: integer
+    mean_bounds:
+      max: 2.50739
+      min: 1.504434
+    nullable: false
+    range:
+      max: 3.5
+      min: 0.5
+    unique: false
+  unit_price:
+    logical_type: numeric
+    mean_bounds:
+      max: 2528.752235
+      min: 1517.251341
+    nullable: false
+    range:
+      max: 4999.49
+      min: 0.0
+    unique: false
+contract_version: 1
+freshness:
+  max_delay_minutes: 360
+generated_at: '2026-01-30T00:00:00Z'
+layer: staging
+primary_key:
+- order_item_id
+status: draft
+table: staging.stg_order_items
+volume:
+  max_rows: 52268
+  min_rows: 20907
+  required_in_batch: false
