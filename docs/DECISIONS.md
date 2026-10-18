@@ -59,3 +59,48 @@ entry each; newest last.
     1.11.0, streamlit 1.66.0, SQLAlchemy 2.1.5, psycopg 3.3.6, pandas 2.3.3,
     numpy 2.5.4, pydantic 2.14.1, sqlglot 29.0.1, typer 0.27.3, ruff 0.17.1,
     mypy 1.20.2, pytest 8.4.2. Full transitive set in `requirements.lock`.
+
+## Phase 1 (2026-10-18)
+
+15. **New modules beyond the §17 layout:** `src/dqs/dbt_run.py` (dbt subprocess
+    wrapper + `dq.pipeline_runs` recording) and `src/dqs/sim/pipeline.py`
+    (seed/day orchestration: generate → load → build). Reason: §17 has no home
+    for dbt invocation or the seed loop; keeping them out of `cli.py` makes the
+    loop unit-testable and CLI presentation-only.
+16. **dbt generic tests use the `arguments:` nesting** required since dbt
+    1.11 (installed: 1.12.6); top-level args are only a deprecation warning
+    today but will break later.
+17. **`sources.yml` / `exposures.yml` live under `models/`**, not the project
+    root. Reason: dbt 1.12 did not parse root-level property files ("source
+    named 'raw.customers' which was not found"); model-path properties always
+    parse. Per AGENCY docstring rule: adapt to the installed version.
+18. **Customer ids are contiguous across days** (`cumulative(day-1)+1 …
+    cumulative(day)`); orders reference `1..cumulative(date)`. Reason: FK
+    integrity on clean days is a structural guarantee, not probabilistic — the
+    earlier slot-based allocation left unassigned id ranges, which the
+    `relationships` dbt test exposed (1901 orphans fixed).
+19. **High-volume ids (orders, items, payments) use per-date slots**
+    (1000/5000/2000/day). Reason: keeps cross-date PK uniqueness structural
+    while within-batch allocation stays simple; orphan risk does not exist for
+    them because children are generated from the actual orders frame.
+20. **Children derive from the generated `orders` frame** (row counts, order
+    ids, totals). Reason: payment sums equal order totals exactly and child
+    inconsistencies cannot occur on clean data.
+21. **Products: header present in every batch, 0 rows after day 1.** Reason:
+    keeps `missing table` (F9, whole header absent) unambiguous versus "no new
+    rows"; the catalogue persists in `raw.products` for FK joins.
+22. **Loader rejects a duplicate batch id** (`batch_YYYYMMDD` already in
+    `dq.batches` → error). Reason: silently appending would double rows and
+    break determinism promises; re-runs require the explicit `dqs db reset`.
+23. **`dq.batch_tables.columns` records the observed batch header without
+    `_batch_id`/`_loaded_at`.** Reason: those columns are loader-owned metadata
+    (§4.1) rather than source-delivered columns; schema checks already ignore
+    them, so making them absent from the header avoids double-ignoring.
+24. **dbt executable resolution: the console script next to the running
+    interpreter** (`.venv\Scripts\dbt.exe`). Reason: no PATH dependence; works
+    from any shell without activation.
+25. **`sim day` assumes the baseline is seeded** (order → customer
+    relationships span all historical days). Documented in `--help`; no
+    defensive workaround, since faults must stay attributable.
+26. **`--seed` defaults to `DQS_SEED` from `Settings`** when the flag is
+    omitted, keeping env-config and CLI flag consistent.
