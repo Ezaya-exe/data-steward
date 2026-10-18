@@ -21,6 +21,19 @@ def test_same_seed_and_date_reproduces_batch_byte_identically() -> None:
         assert _bytes(a[name]) == _bytes(b[name]), f"{name} differs between identical seeds"
 
 
+def test_day_three_after_skipping_day_two_is_identical() -> None:
+    """The generator is a pure function of (seed, date): a skipped day leaves
+    no state behind, so the missing-batch scenario replays later days exactly."""
+    day_two, day_three = dt.date(2026, 1, 2), dt.date(2026, 1, 3)
+    for seed in (42, 7):
+        normal = generator.tables_for_date(day_three, seed)
+        skipped_and_discarded = generator.tables_for_date(day_two, seed)
+        after_skip = generator.tables_for_date(day_three, seed)
+        assert len(skipped_and_discarded) == 5  # the skipped day really was generated
+        for name in normal:
+            assert _bytes(normal[name]) == _bytes(after_skip[name]), (seed, name)
+
+
 def test_different_seed_changes_the_batch() -> None:
     a = generator.tables_for_date(dt.date(2026, 1, 7), 42)
     b = generator.tables_for_date(dt.date(2026, 1, 7), 43)
