@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dqs-postgres
+    environment:
+      POSTGRES_DB: warehouse
+      POSTGRES_USER: dqs
+      POSTGRES_PASSWORD: dqs
+    ports:
+      - "5433:5432"
+    volumes:
+      - dqs_pgdata:/var/lib/postgresql/data
+      # Roles (000) and dq DDL (001) run once at first init, alphabetically.
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dqs -d warehouse"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  dqs_pgdata:
