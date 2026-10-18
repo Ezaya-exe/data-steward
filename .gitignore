@@ -1,0 +1,24 @@
+# Environment / secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local data and generated artifacts (AGENTS.md §3/§5)
+data/
+out/
+target/
+dbt_packages/
+*.sqlite
+
+# Benchmark outputs are recorded in the phase notes, not committed per run
+benchmarks/results/*
+!benchmarks/results/.gitkeep

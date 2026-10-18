@@ -1,0 +1,9 @@
+# Normalize line endings: LF in the working tree and repo (Windows host has
+# core.autocrlf=true, which would otherwise rewrite text files).
+* text=auto eol=lf
+
+# Generated/data artifacts as binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.sqlite binary
