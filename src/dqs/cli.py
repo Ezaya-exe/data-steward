@@ -16,7 +16,7 @@ non-zero so scripts/CI can rely on it.
 from __future__ import annotations
 
 import datetime as dt
-from typing import NoReturn
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
@@ -25,8 +25,10 @@ from dqs import db as dbmod
 from dqs import dbt_run
 from dqs import dev as devmod
 from dqs.config import load_settings
-from dqs.errors import DqsError
+from dqs.errors import DqsError, FaultSpecError
+from dqs.models.faults import FaultSpec
 from dqs.sim import pipeline as sim_pipeline
+from dqs.sim.faults import parse_fault_specs
 
 app = typer.Typer(name="dqs", help="Agentic data-quality steward for batch pipelines.")
 db_app = typer.Typer(help="Warehouse bootstrap commands (roles, schemas, dq tables).")
@@ -100,25 +102,42 @@ def seed(
 @sim_app.command()
 def day(
     date: str = typer.Option(..., help="Business date, YYYY-MM-DD."),
+    fault_specs: Annotated[
+        list[str] | None,
+        typer.Option("--fault", help="Fault spec (repeatable): kind:table[.column][:k=v,...]."),
+    ] = None,  # typer: the repeatable Option lives in the annotation
     dbt_build: bool = typer.Option(True, "--dbt/--no-dbt", help="Run dbt build after loading."),
     seed_value: int | None = typer.Option(
         None, "--seed", help="Generator seed; defaults to DQS_SEED from settings."
     ),
 ) -> None:
-    """Generate + load one day's batch, then run dbt build and record the run."""
+    """Generate + load one day's batch (with --fault specs), then run dbt build."""
     settings = load_settings()
     seed = seed_value if seed_value is not None else settings.dqs_seed
     try:
         business_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise typer.BadParameter(f"--date must be YYYY-MM-DD ({exc})") from exc
-    console.print(f"loading clean day {business_date} (seed={seed}) …")
     try:
-        result = sim_pipeline.load_day(settings, business_date, seed, run_dbt=dbt_build)
+        specs: list[FaultSpec] = parse_fault_specs(fault_specs)
+    except FaultSpecError as exc:
+        _fail(exc)
+    console.print(f"loading day {business_date} (seed={seed}, {len(specs)} fault specs) …")
+    try:
+        result = sim_pipeline.load_day(
+            settings, business_date, seed, run_dbt=dbt_build, specs=specs
+        )
     except DqsError as exc:
         _fail(exc)
     dbt_mark = "" if result["dbt_exit"] is None else f" dbt_exit={result['dbt_exit']}"
     console.print(f"  rows={result['rows']}{dbt_mark}")
+    for truth in result["ground_truth"]:
+        target = truth.table if truth.column is None else f"{truth.table}.{truth.column}"
+        console.print(
+            f"  fault {truth.kind.value} on {target} -> "
+            f"expects {', '.join(truth.expected_checks)} "
+            f"({truth.expected_category.value}/{truth.expected_resolution.value})"
+        )
     if result["dbt_exit"] not in (None, 0):
         raise typer.Exit(result["dbt_exit"] or 1)
     console.print(f"[green]ok[/green] day {business_date} loaded")

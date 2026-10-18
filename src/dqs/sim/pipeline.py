@@ -14,6 +14,8 @@ from typing import Any, Final
 from dqs import db as dbmod
 from dqs import dbt_run
 from dqs.config import Settings
+from dqs.models.faults import FaultSpec
+from dqs.sim import faults as faults_mod
 from dqs.sim import generator, loader
 
 BASELINE_START: Final = generator.BASELINE_START_DATE
@@ -42,13 +44,24 @@ def seed_baseline(
 
 
 def load_day(
-    settings: Settings, business_date: dt.date, seed: int, run_dbt: bool = True
+    settings: Settings,
+    business_date: dt.date,
+    seed: int,
+    run_dbt: bool = True,
+    specs: list[FaultSpec] | None = None,
 ) -> dict[str, Any]:
-    """Load one day's clean batch and (by default) build dbt + record the run."""
+    """Generate one day's batch, apply fault specs, load it, build dbt + record.
+
+    Faults mutate the generated frames only (and arrival time for F8) — the
+    generator itself is never touched, so skipped/other days stay identical.
+    """
+    batch = generator.tables_for_date(business_date, seed)
+    faulted = faults_mod.apply_faults(batch, specs or [], business_date, seed)
     engine = dbmod.make_rw_engine(settings)
     try:
-        batch = generator.tables_for_date(business_date, seed)
-        counts = loader.load_batch(engine, business_date, batch)
+        counts = loader.load_batch(
+            engine, business_date, faulted.tables, arrived_at=faulted.arrived_at
+        )
     finally:
         engine.dispose()
     dbt_code: int | None = None
@@ -56,4 +69,9 @@ def load_day(
         dbt_code, _out = dbt_run.run_dbt_build(
             settings, target="dev", batch_id=loader.batch_id_for_date(business_date)
         )
-    return {"rows": counts, "dbt_exit": dbt_code}
+    return {
+        "rows": counts,
+        "dbt_exit": dbt_code,
+        "ground_truth": faulted.ground_truth,
+        "arrived_at": faulted.arrived_at,
+    }

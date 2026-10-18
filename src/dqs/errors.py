@@ -17,5 +17,13 @@ class ConfigError(DqsError):
     """Configuration or environment is invalid/incomplete."""
 
 
+class FaultSpecError(DqsError):
+    """A fault spec string (or its parameters) is malformed or out of range."""
+
+
+class ContractError(DqsError):
+    """A data-contract file is missing, malformed, or fails strict validation."""
+
+
 class DatabaseError(DqsError):
     """The warehouse is unreachable, or init/reset/DDL failed."""

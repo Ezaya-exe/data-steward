@@ -46,14 +46,18 @@ def load_batch(
     engine: Engine,
     business_date: dt.date,
     tables: Mapping[str, pd.DataFrame],
+    arrived_at: dt.datetime | None = None,
 ) -> dict[str, int]:
     """Load one batch (all given tables) atomically; return rows loaded per table.
 
     ``tables`` maps a raw table name to its DataFrame (business columns only).
+    ``arrived_at`` overrides the simulated arrival time (fault F8 late_batch):
+    it stamps `dq.batches.arrived_at` and every row's `_loaded_at` so freshness
+    detection can see the delay; the business date stays untouched.
     """
 
     batch_id = batch_id_for_date(business_date)
-    arrived = arrived_at_for(business_date)
+    arrived = arrived_at if arrived_at is not None else arrived_at_for(business_date)
 
     for name, frame in tables.items():
         _validate_table_name(name)
