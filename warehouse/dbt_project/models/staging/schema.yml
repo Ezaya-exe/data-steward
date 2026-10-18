@@ -1,0 +1,85 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: Typed customer dimension records (append across batches).
+    columns:
+      - name: customer_id
+        data_tests: [not_null, unique]
+      - name: email
+        data_tests: [not_null]
+      - name: signup_date
+        data_tests: [not_null]
+
+  - name: stg_products
+    description: Typed product catalogue.
+    columns:
+      - name: product_id
+        data_tests: [not_null, unique]
+      - name: category
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [electronics, apparel, home, beauty, toys]
+      - name: price
+        data_tests: [not_null]
+
+  - name: stg_orders
+    description: Typed order facts.
+    columns:
+      - name: order_id
+        data_tests: [not_null, unique]
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: order_ts
+        data_tests: [not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              values: [placed, paid, shipped, delivered, cancelled]
+      - name: total_amount
+        data_tests: [not_null]
+
+  - name: stg_order_items
+    description: Typed order line items.
+    columns:
+      - name: order_item_id
+        data_tests: [not_null, unique]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+
+  - name: stg_payments
+    description: Typed payments (1 per order, ~5% split).
+    columns:
+      - name: payment_id
+        data_tests: [not_null, unique]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [card, upi, netbanking, cod]
+      - name: amount
+        data_tests: [not_null]

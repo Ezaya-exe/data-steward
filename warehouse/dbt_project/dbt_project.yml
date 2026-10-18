@@ -1,0 +1,17 @@
+name: dq_warehouse
+version: 1.0.0
+config-version: 2
+profile: dq_warehouse
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+target-path: target
+
+models:
+  dq_warehouse:
+    staging:
+      +materialized: table
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

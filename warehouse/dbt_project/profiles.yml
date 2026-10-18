@@ -1,0 +1,22 @@
+dq_warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('PGHOST', 'localhost') }}"
+      port: "{{ env_var('PGPORT', '5433') | int }}"
+      user: "{{ env_var('PGUSER', 'dqs') }}"
+      password: "{{ env_var('PGPASSWORD', 'dqs') }}"
+      dbname: "{{ env_var('PGDATABASE', 'warehouse') }}"
+      schema: dev
+      threads: 4
+    sandbox:
+      type: postgres
+      host: "{{ env_var('PGHOST', 'localhost') }}"
+      port: "{{ env_var('PGPORT', '5433') | int }}"
+      user: "{{ env_var('PGUSER', 'dqs') }}"
+      password: "{{ env_var('PGPASSWORD', 'dqs') }}"
+      dbname: "{{ env_var('PGDATABASE', 'warehouse') }}"
+      # namespaced by the schema-name macro so sandbox runs are droppable (§5)
+      schema: "{{ env_var('DQS_SANDBOX_SCHEMA', 'dqs_sandbox_tmp') }}"
+      threads: 4

@@ -1,0 +1,36 @@
+version: 2
+
+exposures:
+  - name: revenue_dashboard
+    label: Revenue Dashboard
+    type: dashboard
+    maturity: high
+    description: Daily revenue trend read by finance.
+    owner:
+      name: Finance Analytics
+      email: finance-analytics@example.com
+    depends_on:
+      - ref('fct_daily_revenue')
+
+  - name: customer_360_dashboard
+    label: Customer 360
+    type: dashboard
+    maturity: medium
+    description: Per-customer profile and order history for support.
+    owner:
+      name: CRM Team
+      email: crm@example.com
+    depends_on:
+      - ref('dim_customers')
+      - ref('fct_orders')
+
+  - name: ops_fulfilment_dashboard
+    label: Ops Fulfilment
+    type: dashboard
+    maturity: low
+    description: Order pipeline status funnel for the ops team.
+    owner:
+      name: Operations
+      email: ops@example.com
+    depends_on:
+      - ref('fct_orders')

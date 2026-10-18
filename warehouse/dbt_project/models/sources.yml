@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    database: "{{ env_var('PGDATABASE', 'warehouse') }}"
+    description: Landing tables written by the batch loader; every business column is TEXT.
+    tables:
+      - name: customers
+        loaded_at_field: _loaded_at
+      - name: products
+        loaded_at_field: _loaded_at
+      - name: orders
+        loaded_at_field: _loaded_at
+      - name: order_items
+        loaded_at_field: _loaded_at
+      - name: payments
+        loaded_at_field: _loaded_at
