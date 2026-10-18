@@ -18,6 +18,8 @@ out/
 target/
 dbt_packages/
 *.sqlite
+warehouse/dbt_project/logs/
+warehouse/dbt_project/.user.yml
 
 # Benchmark outputs are recorded in the phase notes, not committed per run
 benchmarks/results/*
