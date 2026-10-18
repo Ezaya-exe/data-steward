@@ -1,0 +1,122 @@
+"""Application settings.
+
+The single place where environment variables are read (AGENTS.md §6 forbids
+scattered `os.environ` reads). Values come from the process environment and,
+when present, from a `.env` file at the project root; the defaults below are
+the documented ones from docs/ARCHITECTURE.md §3.
+
+Aliases exist because the documented variable names have no underscore after
+`PG` (`PGHOST`, `PGPORT`, ...) while Python field names are snake_case.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
+
+LLM_PROVIDERS = frozenset({"anthropic", "openai", "google_genai", "ollama", "fake"})
+GITHUB_MODES = frozenset({"dry_run", "live"})
+
+
+class Settings(BaseSettings):
+    """All configuration, validated once at load time.
+
+    Secrets (API keys, tokens, passwords) live here and are never logged or
+    committed; they only travel to the components that need them.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    # Postgres (host port 5433 avoids a local instance)
+    pg_host: str = Field("localhost", validation_alias=AliasChoices("PGHOST", "PG_HOST"))
+    pg_port: int = Field(5433, validation_alias=AliasChoices("PGPORT", "PG_PORT"))
+    pg_database: str = Field(
+        "warehouse", validation_alias=AliasChoices("PGDATABASE", "PG_DATABASE")
+    )
+    pg_user: str = Field("dqs", validation_alias=AliasChoices("PGUSER", "PG_USER"))
+    pg_password: str = Field("dqs", validation_alias=AliasChoices("PGPASSWORD", "PG_PASSWORD"))
+    pg_ro_user: str = Field("dqs_ro", validation_alias=AliasChoices("PG_RO_USER"))
+    pg_ro_password: str = Field("dqs_ro", validation_alias=AliasChoices("PG_RO_PASSWORD"))
+
+    # LLM (provider/model names are validated, keys are not — Phase 4 builds them)
+    llm_provider: str = "anthropic"
+    llm_model: str = "claude-haiku-5-5"
+    llm_model_bench: str = "claude-sonnet-5-5"
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+
+    # GitHub publishing (Phase 6). dry_run writes PR previews to out/ only.
+    github_mode: str = "dry_run"
+    github_token: str = ""
+    github_repo: str = ""
+    github_base_branch: str = "main"
+
+    # Bounded autonomy (AGENTS.md §7.7) and determinism (§8)
+    max_tool_calls: int = 10
+    max_fix_attempts: int = 3
+    max_tokens_per_incident: int = 60000
+    incident_timeout_seconds: int = 300
+    dqs_seed: int = 42
+
+    # Observability (Phase 9, optional)
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = ""
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _check_provider(cls, value: str) -> str:
+        if value not in LLM_PROVIDERS:
+            allowed = ", ".join(sorted(LLM_PROVIDERS))
+            raise ValueError(f"unsupported LLM_PROVIDER {value!r}; expected one of: {allowed}")
+        return value
+
+    @field_validator("github_mode")
+    @classmethod
+    def _check_github_mode(cls, value: str) -> str:
+        if value not in GITHUB_MODES:
+            allowed = ", ".join(sorted(GITHUB_MODES))
+            raise ValueError(f"unsupported GITHUB_MODE {value!r}; expected one of: {allowed}")
+        return value
+
+    @property
+    def rw_database_url(self) -> URL:
+        """SQLAlchemy URL for the read/write app role (`dqs`)."""
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.pg_user,
+            password=self.pg_password,
+            host=self.pg_host,
+            port=self.pg_port,
+            database=self.pg_database,
+        )
+
+    @property
+    def ro_database_url(self) -> URL:
+        """SQLAlchemy URL for the read-only agent role (`dqs_ro`)."""
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.pg_ro_user,
+            password=self.pg_ro_password,
+            host=self.pg_host,
+            port=self.pg_port,
+            database=self.pg_database,
+        )
+
+
+@lru_cache(maxsize=1)
+def load_settings() -> Settings:
+    """Read `.env` + environment once per process and validate.
+
+    Returns a cached instance because the CLI is one-shot; tests that need a
+    fresh object construct `Settings(...)` directly.
+    """
+    return Settings()
