@@ -5,15 +5,32 @@ docs/PHASES.md is order, docs/ARCHITECTURE.md is design.
 
 ## Current state
 
-- **Phase 0 and Phase 1 are complete, committed, and approved.**
-- Latest commit when this file was written: `1ed4ec9` (`docs: phase-1 decisions and
-  report`); the HANDOFF commit itself is newer. `git log --oneline` for the rest.
-- **Warehouse state right now:** Docker Postgres up, loaded with exactly
-  `dqs db reset && dqs sim seed --days 30` — 30 batches (`batch_20260101` …
-  `batch_20260130`), 0 `dq.batch_tables` surprises, all 30 dbt builds recorded
-  `success` in `dq.pipeline_runs`. There is currently **no 2026-01-31 batch**
-  (the Phase-1 demo run of day 31 was wiped by a later reset/re-seed; harmless
-  — generation is deterministic). Phase 2 wants exactly this clean baseline.
+- **Phase 2a is mid-flight, NOT complete.** Review packet:
+  `docs/review/phase-2a-review.md` (honest PASS/FAIL per criterion).
+- Done + committed: **Phase 2 task 1 code** — `sim/faults.py` (parser +
+  F1–F9 injectors + ground truth), `models/enums.py`/`contract.py`/
+  `faults.py` (strict Pydantic), loader `arrived_at` override,
+  `pipeline.load_day(specs=…)`, CLI `sim day --fault` (repeatable). Commit
+  `c67b2e2`. `src/` is ruff+mypy clean.
+- **Known code bug (top of the next session):** `column_added` (F10) is
+  parsed and validated but has NO registered injector —
+  `apply_faults` raises `KeyError`. Grep `@register` in `sim/faults.py`.
+- **Uncommitted draft:** `tests/unit/test_faults.py` — never executed in-repo;
+  it has (a) two import errors (`from dqs import generator|faults` → must be
+  `dqs.sim.…`), (b) a wrong F5 positional-ordering assertion, (c) a
+  trailing-colon negative that current parser behavior deliberately treats as
+  "no params" (decide: reject or accept — log in DECISIONS), (d) 6 E501 lines.
+  Evaluated via a corrected temp copy: 28 passed / 6 failed.
+- **Not started (Phase 2 task 2 + check engine wiring out of scope for 2a):**
+  `contracts/profiler.py|generator.py|store.py` are placeholder stubs; 13
+  contract YAMLs, `dqs contracts generate|show|approve`, the skipped-day
+  purity test, contract-determinism test, unknown-key test and the held-out
+  fit test (clean days 2026-01-31…2026-02-04) are all missing.
+- **Warehouse state right now:** Docker Postgres up, exactly
+  `dqs db reset && dqs sim seed --days 30` — 30 batches
+  (`batch_20260101`…`batch_20260130`), all dbt builds `success` in
+  `dq.pipeline_runs`, no 2026-01-31+ batches. That is also the contract
+  baseline Phase 2 needs.
 - Repo is at `D:\study\python\data steward` (git `main`, remote: none).
 - `.env` exists locally (copy of `.env.example`), is **gitignored, never commit it**.
 
@@ -119,10 +136,10 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   skip 2026-02-01) still work and history can be replayed deterministically.
 - **Fault injection happens AFTER generation, BEFORE loading** — faults are pure
   functions over the generated frames (arrival-time faults like F8 are the
-  exception; they adjust metadata). ⚠ concrete debt: `sim/loader.py` currently
-  computes `arrived_at` itself from the business date — Phase 2 must add an
-  optional `arrived_at` override parameter to `load_batch`/`load_day` for F8
-  `late_batch`, recording the same observed header semantics.
+  exception; they adjust metadata). ✅ resolved in 2a: `loader.load_batch` takes
+  an optional `arrived_at` override and `pipeline.load_day(specs=…)` applies the
+  faults; F8 returns that override (`dq.batches.arrived_at` + `_loaded_at` move,
+  frames don't). Still untested e2e.
 - **Zero false positives is an acceptance criterion** — clean days
   2026-01-31…02-04 must produce 0 incidents. That's why clean-day generation
   (not the checks!) carries the burden: ranges/means/volume bounds come from the
@@ -153,7 +170,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   defensive workaround — intentional).
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
-- `dqs sim day --fault` does not exist yet (Phase 2).
+- `dqs sim day --fault` now exists (2a: injectors + CLI) but the e2e fault-load
+  integration tests and ALL of contracts (task 2 + `dqs contracts *`) are still missing.
 - `dq.publications` has no primary key by spec (§4.3) — idempotency is enforced
   in application code (Phase 6).
 - Windows console shows mojibake for some rich Unicode glyphs in dbt output —
