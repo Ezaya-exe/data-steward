@@ -23,7 +23,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import Engine, Row, text
 
@@ -38,6 +38,14 @@ OPEN_STATUSES: tuple[IncidentStatus, ...] = (
     IncidentStatus.INVESTIGATING,
     IncidentStatus.AWAITING_APPROVAL,
 )
+# One column list for every incident read; Phase 3 adds the three jsonb
+# lifecycle blobs (root_cause/impact/resolution) so a stored impact report
+# survives `get_incident` (§4.3 writes them, readers must carry them).
+_INCIDENT_COLUMNS: Final = (
+    "incident_id, fingerprint, batch_id, table_name, status, severity, "
+    "violations, root_cause, impact, resolution, created_at, updated_at"
+)
+
 _SEVERITY_RANK: dict[Severity, int] = {Severity.WARNING: 0, Severity.BREAKING: 1}
 
 
@@ -225,11 +233,7 @@ def _open_incidents(engine: Engine) -> list[Incident]:
     statuses = [status.value for status in OPEN_STATUSES]
     with engine.connect() as conn:
         rows = conn.execute(
-            text(
-                "SELECT incident_id, fingerprint, batch_id, table_name, status, severity, "
-                "violations, created_at, updated_at FROM dq.incidents "
-                "WHERE status = ANY(:statuses)"
-            ),
+            text(f"SELECT {_INCIDENT_COLUMNS} FROM dq.incidents WHERE status = ANY(:statuses)"),
             {"statuses": statuses},
         ).fetchall()
     return [_row_to_incident(row) for row in rows]
@@ -237,10 +241,7 @@ def _open_incidents(engine: Engine) -> list[Incident]:
 
 def list_incidents(engine: Engine, status: str | None = None, limit: int = 200) -> list[Incident]:
     """All incidents, newest-updated first (optionally filtered by status)."""
-    sql = (
-        "SELECT incident_id, fingerprint, batch_id, table_name, status, severity, "
-        "violations, created_at, updated_at FROM dq.incidents"
-    )
+    sql = f"SELECT {_INCIDENT_COLUMNS} FROM dq.incidents"
     params: dict[str, object] = {"limit": limit}
     if status is not None:
         sql += " WHERE status = :status"
@@ -255,10 +256,7 @@ def get_incident(engine: Engine, incident_id: uuid.UUID) -> Incident | None:
     """One incident by id, or None when it does not exist."""
     with engine.connect() as conn:
         row = conn.execute(
-            text(
-                "SELECT incident_id, fingerprint, batch_id, table_name, status, severity, "
-                "violations, created_at, updated_at FROM dq.incidents WHERE incident_id = :id"
-            ),
+            text(f"SELECT {_INCIDENT_COLUMNS} FROM dq.incidents WHERE incident_id = :id"),  # noqa: S608 — constant column list
             {"id": incident_id},
         ).fetchone()
     return None if row is None else _row_to_incident(row)
@@ -290,6 +288,9 @@ def _row_to_incident(row: Row[Any]) -> Incident:
         status,
         severity,
         violations,
+        root_cause,
+        impact,
+        resolution,
         created_at,
         updated_at,
     ) = tuple(row)
@@ -301,6 +302,9 @@ def _row_to_incident(row: Row[Any]) -> Incident:
         status=IncidentStatus(status),
         severity=Severity(severity),
         violations=[Violation.model_validate(v) for v in violations],
+        root_cause=root_cause,
+        impact=impact,
+        resolution=resolution,
         created_at=created_at,
         updated_at=updated_at,
     )

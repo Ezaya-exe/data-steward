@@ -55,7 +55,13 @@ def _newest_models_mtime(project_dir: Path) -> float | None:
 
 
 def is_stale(path: Path, project_dir: Path) -> bool:
-    """True when the manifest is missing/invalid/older than the model sources."""
+    """True when the manifest is missing/invalid/older than the model sources.
+
+    Also stale when any *model* node lacks compiled_code: after a failed
+    ``dbt build``, dbt skips compiling children of broken nodes (observed on
+    dbt 1.12), leaving a torn manifest that the column heuristic cannot use
+    (DECISIONS 57). ``dbt compile`` rebuilds compiled SQL for every model.
+    """
     if not path.exists():
         return True
     try:
@@ -65,6 +71,13 @@ def is_stale(path: Path, project_dir: Path) -> bool:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("manifest unreadable (%s) — treating as stale", exc)
         return True
+    nodes = loaded.get("nodes") or {}
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("resource_type") != "model":
+            continue
+        code = node.get("compiled_code")
+        if not isinstance(code, str) or not code.strip():
+            return True
     stamp = path.stat().st_mtime
     newest = _newest_models_mtime(project_dir)
     return newest is not None and stamp < newest

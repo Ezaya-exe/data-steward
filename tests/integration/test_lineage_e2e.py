@@ -44,6 +44,7 @@ LEGACY_DB = "dqs_lineage_pre002"
 SEED = 42
 BASELINE_DAYS = 30
 FAULT_DATE = dt.date(2026, 2, 5)
+CLEAN_DATES = [dt.date(2026, 1, 31) + dt.timedelta(days=i) for i in range(5)]
 CONTRACTS_DIR = ROOT / "contracts"
 F1_SPEC = "column_rename:orders.customer_id:new_name=cust_id"
 
@@ -66,6 +67,11 @@ def module_db(settings: Settings) -> Iterator[Settings]:
         module_settings = settings.model_copy(update={"pg_database": MODULE_DB})
         dbmod.init_database(module_settings)
         pipeline.seed_baseline(module_settings, BASELINE_DAYS, SEED, run_dbt=False)
+        # contiguous clean held-out days before the fault day: customer ids are
+        # date-slotted (DECISION 18) and the monitor's missing-batch walk would
+        # otherwise turn the gap into a second incident
+        for day in CLEAN_DATES:
+            pipeline.load_day(module_settings, day, SEED, run_dbt=False)
         yield module_settings
     finally:
         with admin.connect() as conn:
@@ -97,15 +103,9 @@ def test_db_init_twice_on_existing_db_is_idempotent(module_db: Settings) -> None
     assert {"failed_nodes", "run_results_parsed_at"} <= columns
 
 
-def test_migration_002_applies_to_a_pre_002_database(settings: Settings, tmp_path: Path) -> None:
+def test_migration_002_applies_to_a_pre_002_database(settings: Settings) -> None:
     """Simulate an existing DB that predates 002, then upgrade it in place."""
-    pre002 = tmp_path / "sql_pre002"
-    pre002.mkdir()
     source_dir = ROOT / "sql"
-    for name in ("000_roles.sql", "001_init.sql"):
-        (pre002 / name).write_text(
-            (source_dir / name).read_text(encoding="utf-8"), encoding="utf-8"
-        )
 
     admin = sa.create_engine(
         settings.rw_database_url.set(database="postgres"), isolation_level="AUTOCOMMIT"
@@ -116,8 +116,16 @@ def test_migration_002_applies_to_a_pre_002_database(settings: Settings, tmp_pat
             conn.exec_driver_sql(f'CREATE DATABASE "{LEGACY_DB}"')
         legacy_settings = settings.model_copy(update={"pg_database": LEGACY_DB})
 
-        # 1) a database created before 002 has the 001 columns only...
-        dbmod.init_database(legacy_settings, sql_dir=pre002)
+        # 1) a database created before 002 has the 001 columns only (replay the
+        # pre-002 files the way init_database does — one multi-statement trip)
+        legacy_engine = dbmod.make_rw_engine(legacy_settings)
+        try:
+            with legacy_engine.connect() as conn:
+                for name in ("000_roles.sql", "001_init.sql"):
+                    conn.exec_driver_sql((source_dir / name).read_text(encoding="utf-8"))
+                conn.commit()
+        finally:
+            legacy_engine.dispose()
         engine = dbmod.make_rw_engine(legacy_settings)
         try:
             before = _pipeline_run_columns(engine)
@@ -143,8 +151,10 @@ def test_migration_002_applies_to_a_pre_002_database(settings: Settings, tmp_pat
 def test_f1_day_records_failing_nodes_and_impact_prints_the_report(
     module_db: Settings,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # dbt picks the database from the process env (profiles.yml); point it at
+    # the module DB so the dev warehouse is never touched by a test build.
+    monkeypatch.setenv("PGDATABASE", MODULE_DB)
     result = pipeline.load_day(
         module_db,
         FAULT_DATE,
@@ -173,11 +183,16 @@ def test_f1_day_records_failing_nodes_and_impact_prints_the_report(
         assert incident.table == "raw.orders"
 
         # 3) the CLI report prints the acceptance details and persists impact
-        from dqs.cli import impact as impact_command
+        from typer.testing import CliRunner
+
+        from dqs.cli import app as dqs_app
 
         monkeypatch.setattr("dqs.cli.load_settings", lambda: module_db)
-        impact_command(str(incident.incident_id))
-        out = capsys.readouterr().out
+        runner = CliRunner()
+        cli_result = runner.invoke(dqs_app, ["impact", str(incident.incident_id)])
+        out = cli_result.output
+        if cli_result.exception is not None:
+            raise AssertionError(f"impact CLI raised: {cli_result.exception!r}\noutput:\n{out}")
         assert "stg_orders" in out  # affected models
         assert "revenue_dashboard" in out  # exposures printed
         assert "Finance Analytics" in out  # exposures with owners
