@@ -1,58 +1,46 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-19 · Do not treat this file as a spec; AGENTS.md is rules,
-docs/PHASES.md is order, docs/ARCHITECTURE.md is design.
+Last updated: 2026-10-19 (Phase 3 complete) · Do not treat this file as a
+spec; AGENTS.md is rules, docs/PHASES.md is order, docs/ARCHITECTURE.md is
+design.
 
 ## Current state
 
-- **Phase 2a and Phase 2b are complete and ready for review.** Phase reports:
-  `docs/phase-notes/phase-2a.md`, `docs/phase-notes/phase-2b.md`; review packets:
-  `docs/review/phase-2b-review.md` (2a packet's FAIL rows all closed). **Do not
-  start Phase 3** (lineage/impact) until the owner says so.
-- **Phase 2b (check engine + monitor)**: all ten §7.3 checks
-  (`checks/{schema,types,nulls,unique,fk,ranges,volume,freshness}.py`) driven by
-  `CheckEngine.run(batch_id)` against approved raw contracts, plus
-  `src/dqs/incidents.py` (fingerprint/de-dup/merge) and `src/dqs/monitor.py`
-  (the §8 loop). New CLI: `dqs check batch`, `dqs monitor run [--as-of]`,
-  `dqs incidents list|show`. New contract field `Volume.initial_load_excluded`
-  (DECISION 49) so a clean day-1 initial load is not a false positive.
+- **Phase 3 (lineage/impact) is complete and ready for review.** Phase
+  report: `docs/phase-notes/phase-3.md`; review packet:
+  `docs/review/phase-3-review.md` (acceptance table, sample F1/F6/F9 reports,
+  weakest points, Phase-4 risks). **Do not start Phase 4** (investigator
+  agent) until the owner says so.
+- **Phase 3 deliverables**: `lineage/{manifest,graph,columns,impact}.py`
+  (dbt manifest → DAG → blast radius, no LLM; summary = template + the
+  documented Phase-4 hook `render_summary`), `models/impact.py`,
+  `models/pipeline.py`, migration `sql/002_pipeline_run_failures.sql`
+  (applied idempotently by `dqs db init`; failed dbt nodes parsed from
+  run_results.json at build time and stored in `dq.pipeline_runs`),
+  `dqs impact <incident_id>` (prints + persists `dq.incidents.impact`).
+  Fixture-driven unit tests: `tests/fixtures/manifest_fixture.json`
+  (regenerate with `scripts/generate_manifest_fixture.py`).
+- Tests: **214 unit + 52 integration** passing; lint + mypy clean. New
+  integration files: `test_lineage_e2e.py` (its own throwaway DB + real
+  failing dbt build; migration idempotency incl. pre-002 upgrade) and
+  `test_lineage_manifest_e2e.py` (real manifest, auto-regenerates).
+- Phase 2a and Phase 2b are complete (reports:
+  `docs/phase-notes/phase-{0,1,2a,2b}.md`, packets in `docs/review/`).
 - Faults today: `sim/faults.py` with ONE injection registry covering all ten
-  kinds (`set(_INJECTORS) == set(FaultKind)` is tested), parser validates
-  empty-params (`kind:table:` is an error) and orphan_keys FK pairs (`FK_MAP`,
-  parse-time, F5 ids strictly above the cumulative parent max), F10 adds
-  coupon-like text + nulls (DECISIONS 27–32).
-- Contracts today: `contracts/parsing.py` (shared TEXT→type parsing),
-  `contracts/profiler.py` (raw per-batch + staged snapshot, orphan anti-joins)
-  and `contracts/generator.py` (§7.2 thresholds), `contracts/store.py`
-  (deterministic YAML, strict load, approve), `contracts/generation.py`
-  (one-pass `generate_all`), `contracts/fitting.py` (fit/sensitivity HARNESS
-  only — thresholds are exported there for the check engine; it is NOT the
-  check engine). CLI: `dqs contracts generate|show|approve`. The 13 contract
-  YAMLs live in `contracts/`, **all `status: approved`** (the check engine and
-  the monitor load approved contracts only; a byte-identity test guards them).
-- Tests: **217 passed** = 172 unit + 45 integration. Integration files create
-  throwaway DBs (`dqs_test`, or a cloned template for the monitor) and NEVER
-  touch the dev warehouse: `test_faults_e2e.py` (4), `test_contracts_e2e.py`
-  (16 — held-out fit on clean 2026-01-31…02-04, fault sensitivity F1–F7/F9/F10,
-  FK_MAP match, catalog validation, unknown-key rejection, dev-warehouse regen
-  byte-identity), `test_monitor_e2e.py` (15 — monitor acceptance: clean-day zero
-  false positives, the F1–F10 detection matrix, missing batch, de-dup across
-  days). Unique basenames among integration test files matter.
+  kinds. Contracts: all 13 in `contracts/` are `status: approved`.
 - Warehouse state right now: exactly the clean contract baseline — 30 batches
   (`batch_20260101`…`batch_20260130`) in `dq.batches`, max business_date
-  2026-01-30, no 2026-01-31+ batches. Generating contracts against it
-  reproduces the committed files byte-for-byte (tested).
-- Phase-2b hooks (DECISIONS 33–54): bounds on measures only; dimension day-1
-  excluded from volume and recorded as `Volume.initial_load_excluded`;
-  `required_in_batch` only at 100% baseline presence; freshness batch-level via
-  `dq.batches.arrived_at` (F8 is stat-invisible); staged contracts are snapshots
-  (`batches: 1`). Violation fingerprint = `sha1(table|check|column)`; monitor
-  marks consumed batches `checked` (idempotent, drives de-dup).
-- Phase 3 (next, NOT started): lineage/impact — `lineage/manifest.py` +
-  `lineage/graph.py` (dbt manifest → DAG), `lineage/columns.py` (column-level
-  lineage), `ImpactReport` model, `dqs impact <incident_id>`.
-- Repo is at `D:\study\python\data steward` (git `main`, remote: none).
-- `.env` exists locally (copy of `.env.example`), is **gitignored, never commit it**.
+  2026-01-30, no 2026-01-31+ batches, 0 incidents. An acceptance clone
+  (`dqs_phase3_accept`, can be force-dropped) holds 37 batches + 3 incidents
+  (F1/F6/F9 samples from Phase 3).
+- Phase-3 notes (DECISIONS 55–61): failing tests are stored per-run (never
+  read from live files); impact scope = column (F1/F2/F10) / table (volume,
+  F9) / warehouse (freshness/missing batch); manifest staleness includes
+  missing `compiled_code` (a failed `dbt build` leaves a torn manifest —
+  `dbt compile` regenerates); score formula documented; `models_referencing_
+  column` is precision-first (direct-from-source only).
+
+## Running the project (PowerShell, Windows)
 
 ## Running the project (PowerShell, Windows)
 
@@ -67,7 +55,7 @@ Copy-Item .env.example .env
 # every session:
 docker compose up -d --wait postgres        # or: .venv\Scripts\dqs dev up
 .venv\Scripts\dqs db ping                    # rw + ro must both print PostgreSQL 16.x
-.venv\Scripts\dqs db init                    # idempotent (roles/schemas/dq tables)
+.venv\Scripts\dqs db init                    # idempotent (roles/schemas/dq tables + 002)
 
 # quality gates (equivalents: make lint / test / test-int / check)
 .venv\Scripts\dqs dev lint                   # ruff check + ruff format --check + mypy src
@@ -90,6 +78,10 @@ docker compose up -d --wait postgres        # or: .venv\Scripts\dqs dev up
 .venv\Scripts\dqs monitor run --as-of 2026-02-03T00:00Z
 .venv\Scripts\dqs incidents list
 .venv\Scripts\dqs incidents show <uuid>
+
+# Phase 3 flow (needs a faulted day first, then:)
+.venv\Scripts\dqs impact <incident_uuid>     # deterministic blast radius from the manifest DAG
+.venv\Scripts\python scripts\generate_manifest_fixture.py   # refresh the unit-test fixture
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -130,6 +122,17 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
     makes clean FK values look orphaned (customer ids are date-slotted), which
     would produce false positives unrelated to the injected fault.
 
+
+12. **A failed `dbt build` leaves a torn manifest** — children of broken
+    nodes are skipped, so they carry no `compiled_code` (dbt 1.12, observed).
+    The lineage loader treats that as *stale* and regenerates with
+    `dbt compile` (needs Postgres up).
+13. **dbt 1.12 writes `name: null` in `run_results.json`** — for readable
+    node names use `unique_id.split(".")[2]`, never the hash tail.
+14. **Windows console mojibake is a display artifact**, not file corruption:
+    rich tables/Unicode print fine through pytest capture; `Get-Content` and
+    `python -c` output look mangled in cp1252 consoles.
+
 ## File map — the 10 files that matter most
 
 | File | What it does |
@@ -149,6 +152,9 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/checks/engine.py` | `CheckEngine.run(batch_id)` (raw batch scope) / `run_table` (staged, Phase 5); `from_directory` loads approved contracts |
 | `src/dqs/incidents.py` | Violation → incident: `fingerprint`, `build_drafts`, `persist_incidents`, `_merge`, `list_incidents`, `get_incident` |
 | `src/dqs/monitor.py` | The §8 loop: `run_monitor`, `default_as_of`, `unchecked_batches`, `parse_as_of` |
+
+| `src/dqs/lineage/graph.py` | dbt manifest → networkx DAG; upstream/downstream/nodes_for_raw_table (Phase 3) |
+| `src/dqs/lineage/impact.py` | deterministic ImpactReport builder + `render_summary` Phase-4 hook (Phase 3) |
 
 (There are also: `src/dqs/errors.py`, `src/dqs/dev.py`, `src/dqs/checks/{schema,types,nulls,unique,fk,ranges,volume,freshness}.py`,
 `src/dqs/contracts/{store,generator,profiler,fitting,parsing,generation}.py`,
@@ -219,16 +225,22 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   defensive workaround — intentional).
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
-- `dqs sim day --fault`, contracts (`dqs contracts *`) and the check engine /
-  monitor / incidents (`dqs check|monitor|incidents *`) all work and are tested
-  (Phases 2a + 2b). Phase 3 (lineage/impact) is next but NOT started.
+- `dqs sim day --fault`, contracts, check engine / monitor / incidents, and
+  `dqs impact` all work and are tested (Phases 2a+b/3). Phase 4 (investigator
+  agent) is next but NOT started.
 - `dqs monitor run` enforces raw contracts only; staged/marts contracts are
-  reachable via `CheckEngine.run_table` but not yet run by the monitor (Phase 5,
-  sandbox verification).
+  reachable via `CheckEngine.run_table` but not yet run by the monitor (Phase 5).
 - `test_monitor_e2e.py` seeds the 30-day baseline into a template DB once
-  (~2.5 min); acceptable now, revisit if scenarios multiply.
-- `dq.publications` has no primary key by spec (§4.3) — idempotency is enforced
-  in application code (Phase 6).
-- Windows console shows mojibake for some rich Unicode glyphs in dbt output —
-  cosmetic only.
+  (~2.5 min); `test_lineage_e2e.py` seeds its own module DB (~1 min) —
+  acceptable now, revisit if scenarios multiply.
+- Column-level lineage (`models_referencing_column`) is precision-first:
+  only models selecting directly FROM the raw source count; no join scoping
+  (DECISIONS 58). Chained models and dbt-visible `SELECT *` are missed.
+- Pre-002 `dq.pipeline_runs` rows have `failed_nodes = NULL` — their
+  incidents honestly report "no parsed dbt failure record".
+- `dqs impact` may trigger a `dbt compile` manifest regeneration (torn
+  manifest after a failed build); Postgres must be up.
+- `dq.publications` has no primary key by spec (§4.3) — idempotency is
+  enforced in application code (Phase 6).
+- Windows console shows mojibake for some rich Unicode glyphs — cosmetic only.
 - No git remote; push instructions live with the owner.

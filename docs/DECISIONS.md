@@ -258,3 +258,59 @@ entry each; newest last.
 54. **Repaired six non-UTF-8 (cp1252) bytes in `docs/DECISIONS.md`** (em dash,
     ×, ±). They predated this phase and made `ruff format --check .` fail
     repo-wide ("stream did not contain valid UTF-8"); the file is now UTF-8.
+
+## Phase 3 — lineage and impact (2026-10-19)
+
+55. **Failing dbt nodes are parsed from `target/run_results.json` immediately
+    after every build and stored on the same `dq.pipeline_runs` row** (new
+    idempotent migration `sql/002_pipeline_run_failures.sql`: `failed_nodes`
+    jsonb + `run_results_parsed_at`). The impact report reads ONLY the stored
+    record; the live file is never trusted (the next build overwrites it — a
+    torn manifest/run_results after failed builds was actually observed).
+    Pre-002 rows keep `failed_nodes = NULL` and honestly mean "no parsed
+    record exists".
+56. **Impact scope rules.** Incidents naming a column (F1/F2/F10) scope to
+    column-level lineage (only models referencing that column, plus their
+    downstream exposures). Table-scoped incidents without a column (volume,
+    missing table) take the full downstream of that raw source. Batch-level
+    incidents (freshness, missing batch — `table = NULL`) take the downstream
+    of ALL raw sources. When the column heuristic finds nothing, the builder
+    falls back to the table footprint and says so in the summary — an empty
+    blast radius must never silently hide a break.
+57. **Manifest staleness = missing, unparseable, older than the newest
+    `models/**` file, or containing a model without `compiled_code`.**
+    Verified against installed dbt 1.12.6: `compiled_code` IS present after
+    `dbt compile`, and after a FAILED `dbt build` the manifest is torn
+    (children of broken nodes are skipped, so they carry no compiled_code —
+    observed live). Regeneration runs `dbt compile` and fails loudly with the
+    dbt excerpt (a wrong DAG is worse than no DAG). Target/compiled/** exists
+    as a read fallback only.
+58. **`models_referencing_column` is a best-effort heuristic**, documented in
+    `lineage/columns.py`: sqlglot (postgres dialect) over each downstream
+    model's compiled SQL; a model counts only when it selects directly FROM
+    the raw source (so chained models like fct_orders do not count — limiting,
+    but precise) AND the column appears as a column reference. No join/alias
+    scoping: a column with the same name in another joined table is an
+    over-count risk; dbt-visible `SELECT *` stays unexpanded and is missed;
+    comments/strings invisible. Precision over recall, stated everywhere it
+    matters.
+59. **Lineage unit tests use a checked-in fixture generated from the REAL
+    manifest** (`scripts/generate_manifest_fixture.py` →
+    `tests/fixtures/manifest_fixture.json`), trimmed to the keys the lineage
+    code reads but keeping the complete real DAG (5 sources, 8 models, 26
+    tests, 3 exposures with owners/maturities, consistent child/parent maps)
+    — so graph/column tests need no dbt, and the fixture cannot drift
+    silently (regenerating is one command).
+60. **`blast_radius_score`** (deterministic, in DECISIONS for review):
+    `score = 100 × Σ_exposure maturity_weight + 10 × Σ_affected_model
+    1/distance`, maturity_weight high 1.0 / medium 0.6 / low 0.3 (unknown
+    0.5), distance = min graph hops from the affected raw source(s). Rationale:
+    exposures weigh by count (they sum) *and* business criticality
+    (maturity); models weigh by distance like a decay — the blast is worse
+    the closer it starts. The number ranks incidents; it is not an SLA.
+61. **The summary is a template with a Phase-4 hook**: `render_summary()` in
+    `lineage/impact.py` is the single LLM seam — Phase 4 replaces its body
+    with ONE structured LLM call (no tools), falling back to the template on
+    any failure. Phase 3 has no LLM anywhere; unit tests assert the template
+    output. The CLI also persists the report into `dq.incidents.impact` and
+    the incident reader now carries `root_cause`/`impact`/`resolution` jsonb.
