@@ -274,6 +274,17 @@ def test_volume_flags_a_present_but_out_of_window_table() -> None:
     assert violations[0].observed == {"row_count": 0}
 
 
+def test_volume_exempts_only_the_recorded_initial_load_batch() -> None:
+    """DECISIONS 36: the day-1 initial load is out of the window by construction."""
+    window = Volume(min_rows=10, max_rows=20, required_in_batch=True, initial_load_excluded=True)
+    contract = spec(volume=window)  # spec()'s baseline.first == 2026-01-01
+    big = profile({"order_id": stats("order_id")}, row_count=2000)
+    initial = ctx(contract, big, business_date=dt.date(2026, 1, 1))
+    later = ctx(contract, big, business_date=dt.date(2026, 1, 2))
+    assert VolumeRowsCheck().run(initial) == []
+    assert len(VolumeRowsCheck().run(later)) == 1
+
+
 # --- unique --------------------------------------------------------------------------
 
 

@@ -274,7 +274,12 @@ def _primary_key(profile: TableProfile, specs: dict[str, ColumnSpec]) -> list[st
 
 
 def _raw_volume(profile: TableProfile) -> Volume:
-    """Raw-layer volume window (§7.2 + DECISIONS Phase 2a exclusions)."""
+    """Raw-layer volume window (§7.2 + DECISIONS Phase 2a exclusions).
+
+    `initial_load_excluded` is set exactly when the day-1 initial load was left
+    out of the histogram, so the check engine can exempt that same batch
+    (otherwise a clean baseline fails on its own first day).
+    """
     present = [batch for batch in profile.batches if batch.present]
     required = all(batch.present for batch in profile.batches)
     table_name = _bare_table(profile.table)
@@ -284,19 +289,25 @@ def _raw_volume(profile: TableProfile) -> Volume:
             min_rows=0,
             max_rows=math.ceil(PRODUCTS_MAX_SHARE * initial),
             required_in_batch=required,
+            initial_load_excluded=True,
         )
     histogram = [batch.row_count for batch in present]
-    if table_name in DIMENSION_TABLES and profile.batches:
+    table_name_in_dim = table_name in DIMENSION_TABLES and bool(profile.batches)
+    if table_name_in_dim:
         # The day-1 initial load must not set dimension bounds: its rows dwarf
         # every later batch (DECISIONS Phase 2a / ARCHITECTURE §7.2).
         initial_batch_id = profile.batches[0].batch_id
         histogram = [batch.row_count for batch in present if batch.batch_id != initial_batch_id]
+    excluded: bool | None = True if table_name_in_dim else None
     if not histogram:
-        return Volume(min_rows=0, max_rows=0, required_in_batch=required)
+        return Volume(
+            min_rows=0, max_rows=0, required_in_batch=required, initial_load_excluded=excluded
+        )
     return Volume(
         min_rows=max(0, math.floor(VOLUME_MIN_SHARE * min(histogram))),
         max_rows=math.ceil(VOLUME_MAX_SHARE * max(histogram)),
         required_in_batch=required,
+        initial_load_excluded=excluded,
     )
 
 

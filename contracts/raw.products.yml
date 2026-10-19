@@ -38,6 +38,7 @@ primary_key:
 status: approved
 table: raw.products
 volume:
+  initial_load_excluded: true
   max_rows: 20
   min_rows: 0
   required_in_batch: true

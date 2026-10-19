@@ -41,6 +41,7 @@ primary_key:
 status: approved
 table: raw.customers
 volume:
+  initial_load_excluded: true
   max_rows: 68
   min_rows: 21
   required_in_batch: true

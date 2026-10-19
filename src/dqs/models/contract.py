@@ -100,11 +100,17 @@ class Volume(_Strict):
     For raw tables `required_in_batch` means the table's header must appear in
     every batch (F9 whole-header absence is then a violation even at 0 rows);
     the generator derives it from how often the table appeared in the baseline.
+
+    `initial_load_excluded` records that the window was derived *excluding* the
+    baseline's day-1 initial load (DECISIONS 36): the generator omits that batch
+    for dimension tables, so enforcement must exempt the same batch or a clean
+    baseline would fail on its own first day. None means "no such exclusion".
     """
 
     min_rows: int
     max_rows: int
     required_in_batch: bool
+    initial_load_excluded: bool | None = None
 
 
 class Freshness(_Strict):
