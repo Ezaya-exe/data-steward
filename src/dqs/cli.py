@@ -16,20 +16,28 @@ non-zero so scripts/CI can rely on it.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.table import Table
+from sqlalchemy import Engine
 
 from dqs import db as dbmod
 from dqs import dbt_run
 from dqs import dev as devmod
+from dqs import incidents as incidents_mod
+from dqs import monitor as monitor_mod
+from dqs.checks.engine import CheckEngine
 from dqs.config import load_settings
 from dqs.contracts import generation as contracts_generation
 from dqs.contracts import store as contracts_store
 from dqs.errors import DqsError, FaultSpecError
+from dqs.models.contract import Contract
 from dqs.models.faults import FaultSpec
+from dqs.models.violation import Violation
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
 
@@ -39,11 +47,17 @@ dev_app = typer.Typer(help="Developer wrappers around docker compose / pytest / 
 sim_app = typer.Typer(help="Synthetic baseline simulator (generate + load + dbt build).")
 dbt_app = typer.Typer(help="Run dbt against the warehouse warehouse/dbt_project.")
 contracts_app = typer.Typer(help="Data contract generation and approval (§7).")
+check_app = typer.Typer(help="Run the deterministic check engine by hand (§7.3).")
+monitor_app = typer.Typer(help="The batch monitor: run checks and record incidents (§8).")
+incidents_app = typer.Typer(help="Inspect recorded incidents.")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
 app.add_typer(dbt_app, name="dbt")
 app.add_typer(contracts_app, name="contracts")
+app.add_typer(check_app, name="check")
+app.add_typer(monitor_app, name="monitor")
+app.add_typer(incidents_app, name="incidents")
 
 console = Console()
 
@@ -253,6 +267,160 @@ def approve(
         console.print("[yellow]no matching contracts found[/yellow]")
     else:
         console.print(f"[green]ok[/green] {len(rewritten)} approved")
+
+
+@check_app.command("batch")
+def check_batch(
+    batch_id: str = typer.Argument(..., help="Batch id, e.g. batch_20260131."),
+    as_of: str | None = typer.Option(None, "--as-of", help="ISO-8601 instant (informational)."),
+) -> None:
+    """Run the check engine for one batch and print the violations (§7.3)."""
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        check_engine = _check_engine(engine)
+        moment = monitor_mod.parse_as_of(as_of) if as_of is not None else None
+        violations = check_engine.run(batch_id, moment)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    _print_violations(violations)
+
+
+@monitor_app.command("run")
+def monitor_run(
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO-8601 instant (default: watermark)."
+    ),
+) -> None:
+    """Detect on unchecked batches + missing batches, record incidents (§8)."""
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        contracts = _approved_contracts()
+        moment = monitor_mod.parse_as_of(as_of) if as_of is not None else None
+        result = monitor_mod.run_monitor(engine, contracts, moment)
+        incidents = {
+            incident_id: incidents_mod.get_incident(engine, incident_id)
+            for incident_id in (*result.created, *result.updated)
+        }
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    console.print(f"as-of {result.as_of.isoformat()}")
+    console.print(f"batches checked: {len(result.batches_checked)}")
+    for label, ids in (("created", result.created), ("updated", result.updated)):
+        for incident_id in ids:
+            incident = incidents[incident_id]
+            table = incident.table if incident is not None else "-"
+            severity = incident.severity.value if incident is not None else "-"
+            console.print(
+                f"  {label} {str(incident_id)[:8]} {severity} {table}",
+                markup=False,
+            )
+    if result.missing_batches:
+        days = ", ".join(day.isoformat() for day in result.missing_batches)
+        console.print(f"[red]missing batches[/red] {days}")
+    if not result.created and not result.updated and not result.missing_batches:
+        console.print("[green]ok[/green] no incidents")
+
+
+@incidents_app.command("list")
+def incidents_list(
+    status: str | None = typer.Option(None, "--status", help="Filter by incident status."),
+) -> None:
+    """List recorded incidents (newest first)."""
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        items = incidents_mod.list_incidents(engine, status)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    table = Table(show_header=True, header_style="bold")
+    for column in ("id", "status", "severity", "fingerprint", "table", "violations", "updated_at"):
+        table.add_column(column)
+    for incident in items:
+        table.add_row(
+            str(incident.incident_id)[:8],
+            incident.status.value,
+            incident.severity.value,
+            incident.fingerprint[:8],
+            incident.table or "-",
+            str(len(incident.violations)),
+            incident.updated_at.isoformat(),
+        )
+    console.print(table)
+    console.print(f"{len(items)} incident(s)")
+
+
+@incidents_app.command("show")
+def incidents_show(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+) -> None:
+    """Print one incident with its violations and de-duplicated batch list."""
+    try:
+        identifier = uuid.UUID(incident_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    if incident is None:
+        _fail(DqsError(f"no incident with id {incident_id}"))
+    console.print(
+        f"incident {incident.incident_id} [{incident.severity.value}] {incident.status.value}"
+    )
+    console.print(f"  fingerprint {incident.fingerprint}")
+    console.print(f"  table {incident.table or '-'}  batches {', '.join(incident.batches) or '-'}")
+    console.print(
+        f"  created {incident.created_at.isoformat()}  updated {incident.updated_at.isoformat()}"
+    )
+    _print_violations(incident.violations)
+
+
+def _check_engine(engine: Engine) -> CheckEngine:
+    contracts = _approved_contracts()
+    return CheckEngine(engine, contracts)
+
+
+def _approved_contracts() -> dict[str, Contract]:
+    directory = Path.cwd() / contracts_store.CONTRACTS_DIRNAME
+    contracts = contracts_store.load_approved(directory)
+    if not contracts:
+        console.print(
+            "[yellow]warning[/yellow] no approved contracts — "
+            "run 'dqs contracts approve --all' (nothing will be enforced)"
+        )
+    return contracts
+
+
+def _print_violations(violations: list[Violation]) -> None:
+    if not violations:
+        console.print("[green]ok[/green] no violations")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for column in ("check", "severity", "table", "column", "batch", "message"):
+        table.add_column(column)
+    for violation in violations:
+        table.add_row(
+            violation.check,
+            violation.severity.value,
+            violation.table or "-",
+            violation.column or "-",
+            violation.batch_id or "-",
+            violation.message,
+        )
+    console.print(table)
+    console.print(f"{len(violations)} violation(s)")
 
 
 def _tail(output: str, lines: int) -> str:

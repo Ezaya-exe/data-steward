@@ -47,7 +47,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: staging
 primary_key:
 - order_item_id
-status: draft
+status: approved
 table: staging.stg_order_items
 volume:
   max_rows: 52268

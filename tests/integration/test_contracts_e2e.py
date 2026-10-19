@@ -309,10 +309,27 @@ def test_unknown_keys_are_rejected_when_loading(tmp_path: Path) -> None:
 # --- dev-warehouse regeneration determinism -------------------------------------------
 
 
+def _without_status(data: bytes) -> bytes:
+    """Drop the `status:` line: approval is the one allowed diff (DECISIONS 44).
+
+    Generation always writes `status: draft`; the committed catalog has been
+    approved by the human owner. Everything else — every bound, tolerance,
+    ordering, float formatting and line ending — must still be byte-identical,
+    so the determinism guarantee is asserted on the remaining bytes.
+    """
+    return b"".join(
+        line for line in data.splitlines(keepends=True) if not line.startswith(b"status: ")
+    )
+
+
 def test_regenerated_contracts_are_byte_identical_to_committed(
     ro_engine: Engine, tmp_path: Path
 ) -> None:
-    """Two fresh regenerations over the dev baseline yield identical bytes."""
+    """Two fresh regenerations over the dev baseline yield identical bytes.
+
+    Compared to the committed catalog ignoring only the `status:` line, because
+    the owner approves contracts in place (docs/DECISIONS.md 44).
+    """
     runs: list[Path] = []
     for index in range(2):
         directory = tmp_path / f"run{index}"
@@ -323,4 +340,15 @@ def test_regenerated_contracts_are_byte_identical_to_committed(
     second = {p.name: p.read_bytes() for p in sorted(runs[1].glob("*.yml"))}
     assert first == second, "two runs over one baseline diverged"
     committed = {p.name: p.read_bytes() for p in sorted(CONTRACTS_DIR.glob("*.yml"))}
-    assert first == committed, "regenerated files differ from the committed contracts"
+    assert set(first) == set(committed), "regenerated and committed file sets differ"
+    differing = {
+        name: (first[name], committed[name])
+        for name in first
+        if _without_status(first[name]) != _without_status(committed[name])
+    }
+    assert not differing, (
+        "regenerated files differ from the committed contracts beyond the status line: "
+        f"{sorted(differing)}"
+    )
+    # Guard the assumption: the committed catalog really is approved everywhere.
+    assert all(b"\nstatus: approved\n" in data for data in committed.values())

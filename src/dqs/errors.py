@@ -25,5 +25,9 @@ class ContractError(DqsError):
     """A data-contract file is missing, malformed, or fails strict validation."""
 
 
+class CheckError(DqsError):
+    """The check engine was asked for a batch/snapshot it cannot evaluate."""
+
+
 class DatabaseError(DqsError):
     """The warehouse is unreachable, or init/reset/DDL failed."""

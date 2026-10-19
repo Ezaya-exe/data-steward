@@ -1,6 +1,6 @@
-"""Placeholder module (layout only) ? implemented in a later phase.
+"""Deterministic check engine (docs/ARCHITECTURE.md §7.3).
 
-See docs/ARCHITECTURE.md for the contract this module must satisfy and
-docs/PHASES.md for the phase that fills it in. Deliberately contains no
-logic (AGENTS.md: no placeholder logic that pretends to work).
+One module per check family plus `engine.py`, which turns an approved contract
+and a batch (or a staging/marts snapshot) into `list[Violation]` by reusing the
+profiler's facts. No LLM and no parsing happen here.
 """

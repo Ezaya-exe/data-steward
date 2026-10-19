@@ -43,6 +43,17 @@ class Severity(StrEnum):
     WARNING = "warning"
 
 
+class IncidentStatus(StrEnum):
+    """Incident lifecycle (§4.3). Only the open family is de-duplicated into."""
+
+    OPEN = "open"
+    INVESTIGATING = "investigating"
+    AWAITING_APPROVAL = "awaiting_approval"
+    RESOLVED = "resolved"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
 class FaultKind(StrEnum):
     """The 10 fault kinds of the catalog (§6). Values are the spec-string heads."""
 

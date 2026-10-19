@@ -140,7 +140,7 @@ entry each; newest last.
     exactly the schema evolution state contracts must be generated from; the
     `dqs` role has CREATEDB, `WITH (FORCE)` drops need no extra setup.
 
-## Phase 2a — task 2: contracts (2026-10-18)
+## Phase 2a â€” task 2: contracts (2026-10-18)
 
 33. **Contracts are generated from loaded DB rows, never from the simulator.**
     `contracts/profiler.py` reads `raw.*` (TEXT) through `contracts/parsing.py`
@@ -158,22 +158,22 @@ entry each; newest last.
     and temporal columns get uniqueness/nullable/allowed_values rules instead.
 36. **Dimension volume excludes the day-1 initial load**; `products` (empty
     histogram after day 1) gets an explicit `min_rows: 0`,
-    `max_rows: ceil(0.1 × initial)`; `required_in_batch` is true only when the
+    `max_rows: ceil(0.1 Ã— initial)`; `required_in_batch` is true only when the
     table appeared in 100% of baseline batches (`dq.batch_tables` presence).
-37. **Freshness is batch-level via `dq.batches.arrived_at`** — per-table
+37. **Freshness is batch-level via `dq.batches.arrived_at`** â€” per-table
     freshness is guarded by `required_in_batch` + volume only. The
     `late_batch:<table>` table part of the F8 spec stays parseable but
     per-table value is vestigial; the SLA is a single contract-wide
     `max_delay_minutes: 360`.
 38. **`generated_at` is derived from the baseline window** (last business date
-    00:00 UTC), never wall-clock — this is what makes two regeneration runs
+    00:00 UTC), never wall-clock â€” this is what makes two regeneration runs
     byte-identical (acceptance criterion), verified by the byte-identity test.
 39. **Staging/marts contracts are whole-table snapshots** (`batches: 1`,
     `required_in_batch: false`, no FK references): dbt rebuilds them whole, so
     there is no per-batch semantic to model. Raw contracts keep batch facts.
 40. **Mean-bounds sigma floor (`_STD_EPS = 1e-9`)**: with =2 identical batch
     means, s collapses to 0 and MEAN_STD_MULT collapses the window onto the
-    mean; below the floor the MEAN_FALLBACK_SHARE (±25% of mean) fallback
+    mean; below the floor the MEAN_FALLBACK_SHARE (Â±25% of mean) fallback
     applies (real bug found while writing the tests).
 41. **Fit thresholds are exported from `contracts/fitting.py` in one copy**
     (`FK_ORPHAN_MAX 0.005`, `TYPE_PARSE_MIN 0.99`, `NEAR_BOUND_SHARE 0.10`) so
@@ -187,5 +187,5 @@ entry each; newest last.
 43. **F8 (late_batch) is invisible to contract stat bounds by design.** The
     fault changes only arrival time; the integration test documents that stat
     findings stay empty while `arrived_at - scheduled` exceeds
-    `freshness.max_delay_minutes` — detection belongs to the Phase 2b
+    `freshness.max_delay_minutes` â€” detection belongs to the Phase 2b
     freshness check, which reads `dq.batches.arrived_at`.

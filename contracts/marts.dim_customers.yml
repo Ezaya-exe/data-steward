@@ -65,7 +65,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: marts
 primary_key:
 - customer_id
-status: draft
+status: approved
 table: marts.dim_customers
 volume:
   max_rows: 4742

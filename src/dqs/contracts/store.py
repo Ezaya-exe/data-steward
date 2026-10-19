@@ -96,6 +96,19 @@ def load_contracts(directory: Path) -> dict[str, Contract]:
     return contracts
 
 
+def load_approved(directory: Path) -> dict[str, Contract]:
+    """Only the approved contracts — checks enforce nothing else (§7.1).
+
+    Draft contracts are a human-review artifact, not a rule set, so the check
+    engine must never see them; the caller separately warns when this is empty.
+    """
+    return {
+        table: contract
+        for table, contract in load_contracts(directory).items()
+        if contract.status == ContractStatus.APPROVED
+    }
+
+
 def approve(directory: Path, tables: Sequence[str] | None) -> list[Path]:
     """The human step (§7.2): flip `tables` — or all — from draft to approved.
 
