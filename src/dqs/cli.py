@@ -52,7 +52,6 @@ contracts_app = typer.Typer(help="Data contract generation and approval (§7).")
 check_app = typer.Typer(help="Run the deterministic check engine by hand (§7.3).")
 monitor_app = typer.Typer(help="The batch monitor: run checks and record incidents (§8).")
 incidents_app = typer.Typer(help="Inspect recorded incidents.")
-impact_app = typer.Typer(help="Impact analysis for an incident (deterministic lineage, §9).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
@@ -61,7 +60,6 @@ app.add_typer(contracts_app, name="contracts")
 app.add_typer(check_app, name="check")
 app.add_typer(monitor_app, name="monitor")
 app.add_typer(incidents_app, name="incidents")
-app.add_typer(impact_app, name="impact")
 
 console = Console()
 
@@ -391,7 +389,7 @@ def incidents_show(
     _print_violations(incident.violations)
 
 
-@impact_app.command()
+@app.command("impact")
 def impact(
     incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
 ) -> None:
@@ -431,7 +429,9 @@ def impact(
         table.add_column(column)
     for model in report.affected_models:
         table.add_row(
-            model.name, model.layer, str(model.distance),
+            model.name,
+            model.layer,
+            str(model.distance),
             "yes" if model.referencing_column else "-",
         )
     console.print(table)

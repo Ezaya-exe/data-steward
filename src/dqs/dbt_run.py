@@ -15,7 +15,7 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from pydantic import ValidationError
 from sqlalchemy import Row, text
@@ -41,6 +41,13 @@ def dbt_executable() -> Path:
     if not path.exists():
         raise ConfigError(f"dbt executable not found at {path}; install dbt-core in the venv")
     return path
+
+
+def _readable_node_name(unique_id: str) -> str:
+    """`not_null_stg_orders_customer_id` from a dbt unique_id (name field is
+    null in dbt 1.12 run_results)."""
+    parts = unique_id.split(".")
+    return parts[2] if len(parts) > 3 else parts[-1]
 
 
 def parse_run_results(
@@ -79,9 +86,10 @@ def parse_run_results(
         nodes.append(
             NodeResult(
                 unique_id=unique_id,
-                # dbt's own name field when present (tests' unique_ids end in a
-                # content hash, which would otherwise become the name)
-                name=str(entry.get("name") or unique_id.split(".")[-1]),
+                # dbt 1.12 leaves `name` null in run_results (observed); the
+                # readable segment is parts[2] (tests/models), never the hash
+                # tail the unique_id alone would give.
+                name=str(entry.get("name") or _readable_node_name(unique_id)),
                 status=status,
                 message=str(entry.get("message", "") or "")[:1000],
                 batch_id=batch_id,
@@ -147,9 +155,7 @@ def run_dbt_build(
                     "s": started,
                     "f": finished,
                     "log": output[-LOG_EXCERPT_BYTES:],
-                    "nodes": json.dumps(
-                        [n.model_dump(mode="json") for n in failed_nodes]
-                    ),
+                    "nodes": json.dumps([n.model_dump(mode="json") for n in failed_nodes]),
                     "parsed": parsed_at,
                 },
             )

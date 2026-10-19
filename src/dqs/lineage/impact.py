@@ -62,9 +62,7 @@ def _multi_source_distances(graph: nx.DiGraph, roots: list[str]) -> dict[str, in
     return dist
 
 
-def blast_radius_score(
-    models: list[AffectedModel], exposures: list[AffectedExposure]
-) -> float:
+def blast_radius_score(models: list[AffectedModel], exposures: list[AffectedExposure]) -> float:
     """The documented, deterministic blast-radius score (DECISIONS 60)."""
     model_term = sum(1.0 / m.distance for m in models if m.distance >= 1)
     exposure_term = sum(
@@ -186,20 +184,22 @@ def _affected_exposures(
     column is not impacted). TABLE/WAREHOUSE scope: every exposure reachable
     from the affected sources counts.
     """
-    roots: list[str] = (
-        [m.unique_id for m in models] if restrict_to_models else source_ids
-    )
+    roots: list[str] = [m.unique_id for m in models] if restrict_to_models else source_ids
     reach = _multi_source_distances(graph.underlying_graph(), roots)
     exposures: list[AffectedExposure] = []
     for unique_id, payload in graph.payloads():
         if graph.node_kind(unique_id) != "exposure":
             continue
-        depends = payload.get("depends_on") or {}
-        parents = [p for p in (depends.get("nodes") or []) if graph.has_node(p)]  # type: ignore[union-attr]
+        depends = payload.get("depends_on")
+        parent_ids: list[str] = []
+        if isinstance(depends, dict):
+            nodes = depends.get("nodes")
+            if isinstance(nodes, list):
+                parent_ids = [p for p in nodes if graph.has_node(p)]
         # An exposure is impacted iff a parent is in `reach` (the roots sit at
         # distance 0, so an exposure fed directly by a source/referencing
         # model is covered too).
-        if any(p in reach for p in parents):
+        if any(p in reach for p in parent_ids):
             exposures.append(_exposure_entry(unique_id, payload))
     return sorted(exposures, key=lambda e: e.unique_id)
 
@@ -293,9 +293,7 @@ def render_summary(report: ImpactReport, column_lineage_used: bool = False) -> s
     affected_text = (
         f"affected models: {names_text}{more}" if names else "affected models: none downstream"
     )
-    exposures = ", ".join(
-        f"{e.name} ({e.owner or 'no owner'})" for e in report.affected_exposures
-    )
+    exposures = ", ".join(f"{e.name} ({e.owner or 'no owner'})" for e in report.affected_exposures)
     exposure_text = f"exposures impacted: {exposures}" if exposures else "no exposures impacted"
     tests = len(report.failing_tests)
     tests_text = (

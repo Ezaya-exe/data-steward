@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from dqs.lineage.graph import LineageGraph
 from dqs.lineage.columns import models_referencing_column
+from dqs.lineage.graph import LineageGraph
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "manifest_fixture.json"
 

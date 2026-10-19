@@ -73,7 +73,38 @@ def test_torn_or_invalid_file_is_not_an_error(tmp_path: Path) -> None:
 
 def test_malformed_entries_are_skipped(tmp_path: Path) -> None:
     path = tmp_path / "run_results.json"
-    payload = {"results": ["oops", {"status": "fail"}, {"unique_id": "test.a.b", "name": "a", "status": "fail"}]}
+    payload = {
+        "results": [
+            "oops",
+            {"status": "fail"},
+            {"unique_id": "test.a.b", "name": "a", "status": "fail"},
+        ]
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
     nodes = parse_run_results(path)
     assert [n.unique_id for n in nodes] == ["test.a.b"]
+
+
+def test_null_name_falls_back_to_the_readable_segment(tmp_path: Path) -> None:
+    """dbt 1.12 run_results carry name=null; never surface the hash tail."""
+    path = tmp_path / "run_results.json"
+    payload = {
+        "results": [
+            {
+                "unique_id": "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5",
+                "name": None,
+                "status": "fail",
+                "message": "Got 580 results, configured to fail if != 0",
+            },
+            {
+                "unique_id": "model.dq_warehouse.stg_orders",
+                "name": None,
+                "status": "error",
+                "message": "column customer_id does not exist",
+            },
+        ]
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    names = {n.unique_id.split(".")[2]: n.name for n in parse_run_results(path)}
+    assert names["not_null_stg_orders_customer_id"] == "not_null_stg_orders_customer_id"
+    assert names["stg_orders"] == "stg_orders"

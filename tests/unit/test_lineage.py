@@ -1,4 +1,4 @@
-﻿"""Unit tests for the lineage DAG over the checked-in manifest fixture.
+"""Unit tests for the lineage DAG over the checked-in manifest fixture.
 
 The fixture (tests/fixtures/manifest_fixture.json) is generated from the REAL
 dbt manifest by scripts/generate_manifest_fixture.py and mirrors the actual
@@ -155,4 +155,3 @@ def test_downstream_of_unrelated_source_excludes_the_orders_chain(
     names = {name_of(u) for u in graph.downstream(f"{SRC}.raw.customers")}
     assert "stg_orders" not in names
     assert {"stg_customers", "dim_customers"} <= names
-

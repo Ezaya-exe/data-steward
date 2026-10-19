@@ -78,9 +78,11 @@ class LineageGraph:
         # Edges: prefer dbt's own parent_map/child_map (complete, includes
         # dangling refs); derive from depends_on when either side is absent.
         parents: dict[str, list[str]] = {}
-        if isinstance(manifest.get("parent_map"), dict):
-            for child, parent_list in manifest["parent_map"].items():
-                parents[child] = [p for p in (parent_list or []) if p in collected]
+        parent_map = manifest.get("parent_map")
+        if isinstance(parent_map, dict):
+            for key, parent_list in parent_map.items():
+                children_of = list(parent_list) if isinstance(parent_list, list) else []
+                parents[str(key)] = [p for p in children_of if p in collected]
         else:
             for unique_id, payload in collected.items():
                 deps = payload.get("depends_on") or {}

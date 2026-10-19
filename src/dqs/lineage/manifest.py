@@ -30,7 +30,9 @@ from dqs.errors import ConfigError, LineageError
 
 logger = logging.getLogger(__name__)
 
-PROJECT_DIR: Final = Path(__file__).resolve().parents[2] / "warehouse" / "dbt_project"
+# `warehouse/dbt_project` — this file lives one level deeper than dbt_run.py,
+# hence parents[3] (lineage → dqs → src → repo root).
+PROJECT_DIR: Final = Path(__file__).resolve().parents[3] / "warehouse" / "dbt_project"
 
 
 def manifest_path(project_dir: Path = PROJECT_DIR) -> Path:
@@ -48,11 +50,7 @@ def dbt_executable() -> Path:
 
 
 def _newest_models_mtime(project_dir: Path) -> float | None:
-    inputs = [
-        p.stat().st_mtime
-        for p in (project_dir / "models").rglob("*")
-        if p.is_file()
-    ]
+    inputs = [p.stat().st_mtime for p in (project_dir / "models").rglob("*") if p.is_file()]
     return max(inputs) if inputs else None
 
 

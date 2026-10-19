@@ -69,7 +69,9 @@ def _source_name_parts(node_payload: dict[str, object], source_id: str) -> tuple
     return (parts[-2], parts[-1])
 
 
-def _matching_table_tables(parsed: exp.Expression, source: tuple[str, str]) -> list[tuple[str, str]]:
+def _matching_table_tables(
+    parsed: exp.Expression, source: tuple[str, str]
+) -> list[tuple[str, str]]:
     """Every table reference whose qualified name ends with `schema.identifier`."""
     schema, identifier = source
     found: list[tuple[str, str]] = []
@@ -77,7 +79,9 @@ def _matching_table_tables(parsed: exp.Expression, source: tuple[str, str]) -> l
         qualified = (
             f"{table.catalog}.{table.db}.{table.name}"
             if table.catalog
-            else f"{table.db}.{table.name}" if table.db else table.name
+            else f"{table.db}.{table.name}"
+            if table.db
+            else table.name
         ).lower()
         parts = qualified.split(".")
         # schema identifier are always the last two dotted parts; a catalog

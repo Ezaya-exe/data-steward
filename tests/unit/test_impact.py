@@ -29,21 +29,25 @@ def _violation(
     table: str, column: str | None, check: str, severity: Severity = Severity.BREAKING
 ) -> Violation:
     return Violation(
-        check=check, severity=severity, table=table, column=column, batch_id="batch_20260205",
+        check=check,
+        severity=severity,
+        table=table,
+        column=column,
+        batch_id="batch_20260205",
         message=f"{check} on {table}.{column}",
     )
 
 
-def _incident(
-    table: str | None, violations: list[Violation]
-) -> Incident:
+def _incident(table: str | None, violations: list[Violation]) -> Incident:
     return Incident(
         incident_id=uuid.uuid4(),
         fingerprint="x",
         batch_id=violations[0].batch_id if violations else None,
         table=table,
         status=IncidentStatus.OPEN,
-        severity=max((v.severity for v in violations), key=lambda s: s.value) if violations else Severity.WARNING,
+        severity=max((v.severity for v in violations), key=lambda s: s.value)
+        if violations
+        else Severity.WARNING,
         violations=violations,
         created_at=NOW,
         updated_at=NOW,
@@ -56,7 +60,9 @@ def graph() -> LineageGraph:
 
 
 def test_column_incident_uses_column_level_lineage(graph: LineageGraph) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     report = build_impact_report(graph, incident)
     assert report.scope.value == "column"
     names = [m.name for m in report.affected_models]
@@ -70,7 +76,9 @@ def test_column_incident_uses_column_level_lineage(graph: LineageGraph) -> None:
 def test_column_incident_keeps_only_exposures_fed_by_referencing_models(
     graph: LineageGraph,
 ) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     report = build_impact_report(graph, incident)
     # stg_orders is upstream of all three exposures' chains? revenue_dashboard
     # sits on fct_daily_revenue ← fct_orders ← stg_orders, yes; and ops+360 too.
@@ -110,7 +118,9 @@ def test_batch_level_incident_without_table_is_warehouse_scope(
 def test_failing_tests_come_from_the_stored_record_not_live_files(
     graph: LineageGraph,
 ) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     record = PipelineRunRecord(
         run_id=7,
         batch_id="batch_20260205",
@@ -131,7 +141,9 @@ def test_failing_tests_come_from_the_stored_record_not_live_files(
 
 
 def test_no_stored_record_leaves_failing_tests_empty(graph: LineageGraph) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     report = build_impact_report(graph, incident, None)
     assert report.failing_tests == []
 
@@ -163,9 +175,14 @@ def _exposure(name: str, maturity: str):
 
 
 def test_report_is_deterministic(graph: LineageGraph) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     one = build_impact_report(graph, incident)
-    two = build_impact_report(graph, _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]))
+    two = build_impact_report(
+        graph,
+        _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]),
+    )
     a = one.model_dump(mode="json")
     b = two.model_dump(mode="json")
     a.pop("incident_id")
@@ -174,7 +191,9 @@ def test_report_is_deterministic(graph: LineageGraph) -> None:
 
 
 def test_summary_is_the_template_not_an_llm_call(graph: LineageGraph) -> None:
-    incident = _incident("raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")])
+    incident = _incident(
+        "raw.orders", [_violation("raw.orders", "customer_id", "schema.missing_column")]
+    )
     report = build_impact_report(graph, incident)
     assert "blast radius score" in report.summary.lower()
     assert "stg_orders" in report.summary
