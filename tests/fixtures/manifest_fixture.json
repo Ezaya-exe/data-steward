@@ -1,0 +1,736 @@
+{
+  "child_map": {
+    "exposure.dq_warehouse.customer_360_dashboard": [],
+    "exposure.dq_warehouse.ops_fulfilment_dashboard": [],
+    "exposure.dq_warehouse.revenue_dashboard": [],
+    "model.dq_warehouse.dim_customers": [
+      "exposure.dq_warehouse.customer_360_dashboard"
+    ],
+    "model.dq_warehouse.fct_daily_revenue": [
+      "exposure.dq_warehouse.revenue_dashboard"
+    ],
+    "model.dq_warehouse.fct_orders": [
+      "exposure.dq_warehouse.customer_360_dashboard",
+      "exposure.dq_warehouse.ops_fulfilment_dashboard",
+      "model.dq_warehouse.dim_customers",
+      "model.dq_warehouse.fct_daily_revenue"
+    ],
+    "model.dq_warehouse.stg_customers": [
+      "model.dq_warehouse.dim_customers",
+      "test.dq_warehouse.not_null_stg_customers_customer_id.e2cfb1f9aa",
+      "test.dq_warehouse.not_null_stg_customers_email.d7cf761533",
+      "test.dq_warehouse.not_null_stg_customers_signup_date.ef12d9c335",
+      "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500",
+      "test.dq_warehouse.unique_stg_customers_customer_id.c7614daada"
+    ],
+    "model.dq_warehouse.stg_order_items": [
+      "model.dq_warehouse.fct_orders",
+      "test.dq_warehouse.not_null_stg_order_items_order_id.2063801f96",
+      "test.dq_warehouse.not_null_stg_order_items_order_item_id.26a7e2bc35",
+      "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54",
+      "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c",
+      "test.dq_warehouse.unique_stg_order_items_order_item_id.90e333a108"
+    ],
+    "model.dq_warehouse.stg_orders": [
+      "model.dq_warehouse.fct_orders",
+      "test.dq_warehouse.accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled.13447ce143",
+      "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5",
+      "test.dq_warehouse.not_null_stg_orders_order_id.81cfe2fe64",
+      "test.dq_warehouse.not_null_stg_orders_order_ts.84e5059ca1",
+      "test.dq_warehouse.not_null_stg_orders_total_amount.f31d98d41b",
+      "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54",
+      "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500",
+      "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3",
+      "test.dq_warehouse.unique_stg_orders_order_id.e3b841c71a"
+    ],
+    "model.dq_warehouse.stg_payments": [
+      "model.dq_warehouse.fct_orders",
+      "test.dq_warehouse.accepted_values_stg_payments_method__card__upi__netbanking__cod.472e9444e7",
+      "test.dq_warehouse.not_null_stg_payments_amount.4739fb3aea",
+      "test.dq_warehouse.not_null_stg_payments_order_id.601cf57649",
+      "test.dq_warehouse.not_null_stg_payments_payment_id.c19cc50075",
+      "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3",
+      "test.dq_warehouse.unique_stg_payments_payment_id.3744510712"
+    ],
+    "model.dq_warehouse.stg_products": [
+      "test.dq_warehouse.accepted_values_stg_products_category__electronics__apparel__home__beauty__toys.fc7fed4173",
+      "test.dq_warehouse.not_null_stg_products_price.2d147627d4",
+      "test.dq_warehouse.not_null_stg_products_product_id.6373b0acf3",
+      "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c",
+      "test.dq_warehouse.unique_stg_products_product_id.7d950a1467"
+    ],
+    "source.dq_warehouse.raw.customers": [
+      "model.dq_warehouse.stg_customers"
+    ],
+    "source.dq_warehouse.raw.order_items": [
+      "model.dq_warehouse.stg_order_items"
+    ],
+    "source.dq_warehouse.raw.orders": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "source.dq_warehouse.raw.payments": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "source.dq_warehouse.raw.products": [
+      "model.dq_warehouse.stg_products"
+    ],
+    "test.dq_warehouse.accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled.13447ce143": [],
+    "test.dq_warehouse.accepted_values_stg_payments_method__card__upi__netbanking__cod.472e9444e7": [],
+    "test.dq_warehouse.accepted_values_stg_products_category__electronics__apparel__home__beauty__toys.fc7fed4173": [],
+    "test.dq_warehouse.not_null_stg_customers_customer_id.e2cfb1f9aa": [],
+    "test.dq_warehouse.not_null_stg_customers_email.d7cf761533": [],
+    "test.dq_warehouse.not_null_stg_customers_signup_date.ef12d9c335": [],
+    "test.dq_warehouse.not_null_stg_order_items_order_id.2063801f96": [],
+    "test.dq_warehouse.not_null_stg_order_items_order_item_id.26a7e2bc35": [],
+    "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5": [],
+    "test.dq_warehouse.not_null_stg_orders_order_id.81cfe2fe64": [],
+    "test.dq_warehouse.not_null_stg_orders_order_ts.84e5059ca1": [],
+    "test.dq_warehouse.not_null_stg_orders_total_amount.f31d98d41b": [],
+    "test.dq_warehouse.not_null_stg_payments_amount.4739fb3aea": [],
+    "test.dq_warehouse.not_null_stg_payments_order_id.601cf57649": [],
+    "test.dq_warehouse.not_null_stg_payments_payment_id.c19cc50075": [],
+    "test.dq_warehouse.not_null_stg_products_price.2d147627d4": [],
+    "test.dq_warehouse.not_null_stg_products_product_id.6373b0acf3": [],
+    "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54": [],
+    "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c": [],
+    "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500": [],
+    "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3": [],
+    "test.dq_warehouse.unique_stg_customers_customer_id.c7614daada": [],
+    "test.dq_warehouse.unique_stg_order_items_order_item_id.90e333a108": [],
+    "test.dq_warehouse.unique_stg_orders_order_id.e3b841c71a": [],
+    "test.dq_warehouse.unique_stg_payments_payment_id.3744510712": [],
+    "test.dq_warehouse.unique_stg_products_product_id.7d950a1467": []
+  },
+  "exposures": {
+    "exposure.dq_warehouse.customer_360_dashboard": {
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.dim_customers",
+          "model.dq_warehouse.fct_orders"
+        ]
+      },
+      "maturity": "medium",
+      "name": "customer_360_dashboard",
+      "owner": {
+        "email": "crm@example.com",
+        "name": "CRM Team"
+      },
+      "resource_type": "exposure",
+      "unique_id": "exposure.dq_warehouse.customer_360_dashboard"
+    },
+    "exposure.dq_warehouse.ops_fulfilment_dashboard": {
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.fct_orders"
+        ]
+      },
+      "maturity": "low",
+      "name": "ops_fulfilment_dashboard",
+      "owner": {
+        "email": "ops@example.com",
+        "name": "Operations"
+      },
+      "resource_type": "exposure",
+      "unique_id": "exposure.dq_warehouse.ops_fulfilment_dashboard"
+    },
+    "exposure.dq_warehouse.revenue_dashboard": {
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.fct_daily_revenue"
+        ]
+      },
+      "maturity": "high",
+      "name": "revenue_dashboard",
+      "owner": {
+        "email": "finance-analytics@example.com",
+        "name": "Finance Analytics"
+      },
+      "resource_type": "exposure",
+      "unique_id": "exposure.dq_warehouse.revenue_dashboard"
+    }
+  },
+  "metadata": {
+    "dbt_version": "1.12.6",
+    "fixture": true
+  },
+  "nodes": {
+    "model.dq_warehouse.dim_customers": {
+      "compiled_code": "\n-- customer profile dimension with lifetime order aggregates\nwith customer_orders as (\n    select\n        customer_id,\n        count(*)           as order_count,\n        sum(total_amount)  as total_spend,\n        max(order_ts)      as last_order_ts\n    from \"warehouse\".\"marts\".\"fct_orders\"\n    group by customer_id\n)\nselect\n    c.customer_id,\n    c.email,\n    c.state,\n    c.signup_date,\n    coalesce(o.order_count, 0)    as order_count,\n    coalesce(o.total_spend, 0)    as total_spend,\n    o.last_order_ts               as last_order_ts,\n    c._batch_id                   as _first_loaded_batch_id,\n    c._loaded_at                  as _first_loaded_at\nfrom \"warehouse\".\"staging\".\"stg_customers\" c\nleft join customer_orders o on o.customer_id = c.customer_id",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.fct_orders",
+          "model.dq_warehouse.stg_customers"
+        ]
+      },
+      "name": "dim_customers",
+      "original_file_path": "models\\marts\\dim_customers.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.dim_customers"
+    },
+    "model.dq_warehouse.fct_daily_revenue": {
+      "compiled_code": "\n-- daily revenue rollup from order facts\nselect\n    order_ts::date       as order_date,\n    count(*)             as orders,\n    sum(total_amount)    as revenue,\n    sum(payment_total)   as collected\nfrom \"warehouse\".\"marts\".\"fct_orders\"\ngroup by 1\norder by 1",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.fct_orders"
+        ]
+      },
+      "name": "fct_daily_revenue",
+      "original_file_path": "models\\marts\\fct_daily_revenue.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.fct_daily_revenue"
+    },
+    "model.dq_warehouse.fct_orders": {
+      "compiled_code": "\n-- order facts enriched with payment totals and item counts\nwith payments as (\n    select\n        order_id,\n        sum(amount)  as payment_total,\n        count(*)     as payment_count\n    from \"warehouse\".\"staging\".\"stg_payments\"\n    group by order_id\n),\nitems as (\n    select\n        order_id,\n        sum(quantity) as item_qty,\n        count(*)      as item_count\n    from \"warehouse\".\"staging\".\"stg_order_items\"\n    group by order_id\n)\nselect\n    o.order_id,\n    o.customer_id,\n    o.order_ts,\n    o.status,\n    o.total_amount,\n    coalesce(p.payment_total, o.total_amount) as payment_total,\n    coalesce(p.payment_count, 0)              as payment_count,\n    coalesce(i.item_qty, 0)                   as item_qty,\n    coalesce(i.item_count, 0)                 as item_count,\n    o._batch_id,\n    o._loaded_at\nfrom \"warehouse\".\"staging\".\"stg_orders\" o\nleft join payments p on p.order_id = o.order_id\nleft join items   i on i.order_id = o.order_id",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments",
+          "model.dq_warehouse.stg_order_items",
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "fct_orders",
+      "original_file_path": "models\\marts\\fct_orders.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.fct_orders"
+    },
+    "model.dq_warehouse.stg_customers": {
+      "compiled_code": "-- Staging: cast and rename, no defensive cleanup \u2014 faults must break these loudly.\n\nselect\n    customer_id::integer  as customer_id,\n    lower(email)          as email,\n    state,\n    signup_date::date     as signup_date,\n    _batch_id             as _batch_id,\n    _loaded_at            as _loaded_at\nfrom \"warehouse\".\"raw\".\"customers\"",
+      "depends_on": {
+        "nodes": [
+          "source.dq_warehouse.raw.customers"
+        ]
+      },
+      "name": "stg_customers",
+      "original_file_path": "models\\staging\\stg_customers.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.stg_customers"
+    },
+    "model.dq_warehouse.stg_order_items": {
+      "compiled_code": "\nselect\n    order_item_id::integer    as order_item_id,\n    order_id::integer         as order_id,\n    product_id::integer       as product_id,\n    quantity::integer         as quantity,\n    unit_price::numeric(12,2) as unit_price,\n    _batch_id                 as _batch_id,\n    _loaded_at                as _loaded_at\nfrom \"warehouse\".\"raw\".\"order_items\"",
+      "depends_on": {
+        "nodes": [
+          "source.dq_warehouse.raw.order_items"
+        ]
+      },
+      "name": "stg_order_items",
+      "original_file_path": "models\\staging\\stg_order_items.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.stg_order_items"
+    },
+    "model.dq_warehouse.stg_orders": {
+      "compiled_code": "\nselect\n    order_id::integer             as order_id,\n    customer_id::integer          as customer_id,\n    order_ts::timestamptz         as order_ts,\n    status,\n    total_amount::numeric(12, 2)  as total_amount,\n    _batch_id                     as _batch_id,\n    _loaded_at                    as _loaded_at\nfrom \"warehouse\".\"raw\".\"orders\"",
+      "depends_on": {
+        "nodes": [
+          "source.dq_warehouse.raw.orders"
+        ]
+      },
+      "name": "stg_orders",
+      "original_file_path": "models\\staging\\stg_orders.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.stg_orders"
+    },
+    "model.dq_warehouse.stg_payments": {
+      "compiled_code": "\nselect\n    payment_id::integer   as payment_id,\n    order_id::integer     as order_id,\n    method,\n    amount::numeric(12,2) as amount,\n    _batch_id             as _batch_id,\n    _loaded_at            as _loaded_at\nfrom \"warehouse\".\"raw\".\"payments\"",
+      "depends_on": {
+        "nodes": [
+          "source.dq_warehouse.raw.payments"
+        ]
+      },
+      "name": "stg_payments",
+      "original_file_path": "models\\staging\\stg_payments.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.stg_payments"
+    },
+    "model.dq_warehouse.stg_products": {
+      "compiled_code": "\nselect\n    product_id::integer       as product_id,\n    category,\n    price::numeric(12, 2)     as price,\n    _batch_id                 as _batch_id,\n    _loaded_at                as _loaded_at\nfrom \"warehouse\".\"raw\".\"products\"",
+      "depends_on": {
+        "nodes": [
+          "source.dq_warehouse.raw.products"
+        ]
+      },
+      "name": "stg_products",
+      "original_file_path": "models\\staging\\stg_products.sql",
+      "resource_type": "model",
+      "unique_id": "model.dq_warehouse.stg_products"
+    },
+    "test.dq_warehouse.accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled.13447ce143": {
+      "compiled_code": "\n    \n    \n\nwith all_values as (\n\n    select\n        status as value_field,\n        count(*) as n_records\n\n    from \"warehouse\".\"staging\".\"stg_orders\"\n    group by status\n\n)\n\nselect *\nfrom all_values\nwhere value_field not in (\n    'placed','paid','shipped','delivered','cancelled'\n)\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled.13447ce143"
+    },
+    "test.dq_warehouse.accepted_values_stg_payments_method__card__upi__netbanking__cod.472e9444e7": {
+      "compiled_code": "\n    \n    \n\nwith all_values as (\n\n    select\n        method as value_field,\n        count(*) as n_records\n\n    from \"warehouse\".\"staging\".\"stg_payments\"\n    group by method\n\n)\n\nselect *\nfrom all_values\nwhere value_field not in (\n    'card','upi','netbanking','cod'\n)\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "accepted_values_stg_payments_method__card__upi__netbanking__cod",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.accepted_values_stg_payments_method__card__upi__netbanking__cod.472e9444e7"
+    },
+    "test.dq_warehouse.accepted_values_stg_products_category__electronics__apparel__home__beauty__toys.fc7fed4173": {
+      "compiled_code": "\n    \n    \n\nwith all_values as (\n\n    select\n        category as value_field,\n        count(*) as n_records\n\n    from \"warehouse\".\"staging\".\"stg_products\"\n    group by category\n\n)\n\nselect *\nfrom all_values\nwhere value_field not in (\n    'electronics','apparel','home','beauty','toys'\n)\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_products"
+        ]
+      },
+      "name": "accepted_values_stg_products_category__electronics__apparel__home__beauty__toys",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.accepted_values_stg_products_category__electronics__apparel__home__beauty__toys.fc7fed4173"
+    },
+    "test.dq_warehouse.not_null_stg_customers_customer_id.e2cfb1f9aa": {
+      "compiled_code": "\n    \n    \n\n\n\nselect customer_id\nfrom \"warehouse\".\"staging\".\"stg_customers\"\nwhere customer_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_customers"
+        ]
+      },
+      "name": "not_null_stg_customers_customer_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_customers_customer_id.e2cfb1f9aa"
+    },
+    "test.dq_warehouse.not_null_stg_customers_email.d7cf761533": {
+      "compiled_code": "\n    \n    \n\n\n\nselect email\nfrom \"warehouse\".\"staging\".\"stg_customers\"\nwhere email is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_customers"
+        ]
+      },
+      "name": "not_null_stg_customers_email",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_customers_email.d7cf761533"
+    },
+    "test.dq_warehouse.not_null_stg_customers_signup_date.ef12d9c335": {
+      "compiled_code": "\n    \n    \n\n\n\nselect signup_date\nfrom \"warehouse\".\"staging\".\"stg_customers\"\nwhere signup_date is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_customers"
+        ]
+      },
+      "name": "not_null_stg_customers_signup_date",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_customers_signup_date.ef12d9c335"
+    },
+    "test.dq_warehouse.not_null_stg_order_items_order_id.2063801f96": {
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"warehouse\".\"staging\".\"stg_order_items\"\nwhere order_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_order_items"
+        ]
+      },
+      "name": "not_null_stg_order_items_order_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_order_items_order_id.2063801f96"
+    },
+    "test.dq_warehouse.not_null_stg_order_items_order_item_id.26a7e2bc35": {
+      "compiled_code": "\n    \n    \n\n\n\nselect order_item_id\nfrom \"warehouse\".\"staging\".\"stg_order_items\"\nwhere order_item_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_order_items"
+        ]
+      },
+      "name": "not_null_stg_order_items_order_item_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_order_items_order_item_id.26a7e2bc35"
+    },
+    "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5": {
+      "compiled_code": "\n    \n    \n\n\n\nselect customer_id\nfrom \"warehouse\".\"staging\".\"stg_orders\"\nwhere customer_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "not_null_stg_orders_customer_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5"
+    },
+    "test.dq_warehouse.not_null_stg_orders_order_id.81cfe2fe64": {
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"warehouse\".\"staging\".\"stg_orders\"\nwhere order_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "not_null_stg_orders_order_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_orders_order_id.81cfe2fe64"
+    },
+    "test.dq_warehouse.not_null_stg_orders_order_ts.84e5059ca1": {
+      "compiled_code": "\n    \n    \n\n\n\nselect order_ts\nfrom \"warehouse\".\"staging\".\"stg_orders\"\nwhere order_ts is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "not_null_stg_orders_order_ts",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_orders_order_ts.84e5059ca1"
+    },
+    "test.dq_warehouse.not_null_stg_orders_total_amount.f31d98d41b": {
+      "compiled_code": "\n    \n    \n\n\n\nselect total_amount\nfrom \"warehouse\".\"staging\".\"stg_orders\"\nwhere total_amount is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "not_null_stg_orders_total_amount",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_orders_total_amount.f31d98d41b"
+    },
+    "test.dq_warehouse.not_null_stg_payments_amount.4739fb3aea": {
+      "compiled_code": "\n    \n    \n\n\n\nselect amount\nfrom \"warehouse\".\"staging\".\"stg_payments\"\nwhere amount is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "not_null_stg_payments_amount",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_payments_amount.4739fb3aea"
+    },
+    "test.dq_warehouse.not_null_stg_payments_order_id.601cf57649": {
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"warehouse\".\"staging\".\"stg_payments\"\nwhere order_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "not_null_stg_payments_order_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_payments_order_id.601cf57649"
+    },
+    "test.dq_warehouse.not_null_stg_payments_payment_id.c19cc50075": {
+      "compiled_code": "\n    \n    \n\n\n\nselect payment_id\nfrom \"warehouse\".\"staging\".\"stg_payments\"\nwhere payment_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "not_null_stg_payments_payment_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_payments_payment_id.c19cc50075"
+    },
+    "test.dq_warehouse.not_null_stg_products_price.2d147627d4": {
+      "compiled_code": "\n    \n    \n\n\n\nselect price\nfrom \"warehouse\".\"staging\".\"stg_products\"\nwhere price is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_products"
+        ]
+      },
+      "name": "not_null_stg_products_price",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_products_price.2d147627d4"
+    },
+    "test.dq_warehouse.not_null_stg_products_product_id.6373b0acf3": {
+      "compiled_code": "\n    \n    \n\n\n\nselect product_id\nfrom \"warehouse\".\"staging\".\"stg_products\"\nwhere product_id is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_products"
+        ]
+      },
+      "name": "not_null_stg_products_product_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.not_null_stg_products_product_id.6373b0acf3"
+    },
+    "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54": {
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select order_id as from_field\n    from \"warehouse\".\"staging\".\"stg_order_items\"\n    where order_id is not null\n),\n\nparent as (\n    select order_id as to_field\n    from \"warehouse\".\"staging\".\"stg_orders\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders",
+          "model.dq_warehouse.stg_order_items"
+        ]
+      },
+      "name": "relationships_stg_order_items_order_id__order_id__ref_stg_orders_",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54"
+    },
+    "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c": {
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select product_id as from_field\n    from \"warehouse\".\"staging\".\"stg_order_items\"\n    where product_id is not null\n),\n\nparent as (\n    select product_id as to_field\n    from \"warehouse\".\"staging\".\"stg_products\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_products",
+          "model.dq_warehouse.stg_order_items"
+        ]
+      },
+      "name": "relationships_stg_order_items_product_id__product_id__ref_stg_products_",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c"
+    },
+    "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500": {
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select customer_id as from_field\n    from \"warehouse\".\"staging\".\"stg_orders\"\n    where customer_id is not null\n),\n\nparent as (\n    select customer_id as to_field\n    from \"warehouse\".\"staging\".\"stg_customers\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_customers",
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "relationships_stg_orders_customer_id__customer_id__ref_stg_customers_",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500"
+    },
+    "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3": {
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select order_id as from_field\n    from \"warehouse\".\"staging\".\"stg_payments\"\n    where order_id is not null\n),\n\nparent as (\n    select order_id as to_field\n    from \"warehouse\".\"staging\".\"stg_orders\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders",
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "relationships_stg_payments_order_id__order_id__ref_stg_orders_",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3"
+    },
+    "test.dq_warehouse.unique_stg_customers_customer_id.c7614daada": {
+      "compiled_code": "\n    \n    \n\nselect\n    customer_id as unique_field,\n    count(*) as n_records\n\nfrom \"warehouse\".\"staging\".\"stg_customers\"\nwhere customer_id is not null\ngroup by customer_id\nhaving count(*) > 1\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_customers"
+        ]
+      },
+      "name": "unique_stg_customers_customer_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.unique_stg_customers_customer_id.c7614daada"
+    },
+    "test.dq_warehouse.unique_stg_order_items_order_item_id.90e333a108": {
+      "compiled_code": "\n    \n    \n\nselect\n    order_item_id as unique_field,\n    count(*) as n_records\n\nfrom \"warehouse\".\"staging\".\"stg_order_items\"\nwhere order_item_id is not null\ngroup by order_item_id\nhaving count(*) > 1\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_order_items"
+        ]
+      },
+      "name": "unique_stg_order_items_order_item_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.unique_stg_order_items_order_item_id.90e333a108"
+    },
+    "test.dq_warehouse.unique_stg_orders_order_id.e3b841c71a": {
+      "compiled_code": "\n    \n    \n\nselect\n    order_id as unique_field,\n    count(*) as n_records\n\nfrom \"warehouse\".\"staging\".\"stg_orders\"\nwhere order_id is not null\ngroup by order_id\nhaving count(*) > 1\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_orders"
+        ]
+      },
+      "name": "unique_stg_orders_order_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.unique_stg_orders_order_id.e3b841c71a"
+    },
+    "test.dq_warehouse.unique_stg_payments_payment_id.3744510712": {
+      "compiled_code": "\n    \n    \n\nselect\n    payment_id as unique_field,\n    count(*) as n_records\n\nfrom \"warehouse\".\"staging\".\"stg_payments\"\nwhere payment_id is not null\ngroup by payment_id\nhaving count(*) > 1\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_payments"
+        ]
+      },
+      "name": "unique_stg_payments_payment_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.unique_stg_payments_payment_id.3744510712"
+    },
+    "test.dq_warehouse.unique_stg_products_product_id.7d950a1467": {
+      "compiled_code": "\n    \n    \n\nselect\n    product_id as unique_field,\n    count(*) as n_records\n\nfrom \"warehouse\".\"staging\".\"stg_products\"\nwhere product_id is not null\ngroup by product_id\nhaving count(*) > 1\n\n\n",
+      "depends_on": {
+        "nodes": [
+          "model.dq_warehouse.stg_products"
+        ]
+      },
+      "name": "unique_stg_products_product_id",
+      "original_file_path": "models\\staging\\schema.yml",
+      "resource_type": "test",
+      "unique_id": "test.dq_warehouse.unique_stg_products_product_id.7d950a1467"
+    }
+  },
+  "parent_map": {
+    "exposure.dq_warehouse.customer_360_dashboard": [
+      "model.dq_warehouse.dim_customers",
+      "model.dq_warehouse.fct_orders"
+    ],
+    "exposure.dq_warehouse.ops_fulfilment_dashboard": [
+      "model.dq_warehouse.fct_orders"
+    ],
+    "exposure.dq_warehouse.revenue_dashboard": [
+      "model.dq_warehouse.fct_daily_revenue"
+    ],
+    "model.dq_warehouse.dim_customers": [
+      "model.dq_warehouse.fct_orders",
+      "model.dq_warehouse.stg_customers"
+    ],
+    "model.dq_warehouse.fct_daily_revenue": [
+      "model.dq_warehouse.fct_orders"
+    ],
+    "model.dq_warehouse.fct_orders": [
+      "model.dq_warehouse.stg_order_items",
+      "model.dq_warehouse.stg_orders",
+      "model.dq_warehouse.stg_payments"
+    ],
+    "model.dq_warehouse.stg_customers": [
+      "source.dq_warehouse.raw.customers"
+    ],
+    "model.dq_warehouse.stg_order_items": [
+      "source.dq_warehouse.raw.order_items"
+    ],
+    "model.dq_warehouse.stg_orders": [
+      "source.dq_warehouse.raw.orders"
+    ],
+    "model.dq_warehouse.stg_payments": [
+      "source.dq_warehouse.raw.payments"
+    ],
+    "model.dq_warehouse.stg_products": [
+      "source.dq_warehouse.raw.products"
+    ],
+    "source.dq_warehouse.raw.customers": [],
+    "source.dq_warehouse.raw.order_items": [],
+    "source.dq_warehouse.raw.orders": [],
+    "source.dq_warehouse.raw.payments": [],
+    "source.dq_warehouse.raw.products": [],
+    "test.dq_warehouse.accepted_values_stg_orders_status__placed__paid__shipped__delivered__cancelled.13447ce143": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.accepted_values_stg_payments_method__card__upi__netbanking__cod.472e9444e7": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.accepted_values_stg_products_category__electronics__apparel__home__beauty__toys.fc7fed4173": [
+      "model.dq_warehouse.stg_products"
+    ],
+    "test.dq_warehouse.not_null_stg_customers_customer_id.e2cfb1f9aa": [
+      "model.dq_warehouse.stg_customers"
+    ],
+    "test.dq_warehouse.not_null_stg_customers_email.d7cf761533": [
+      "model.dq_warehouse.stg_customers"
+    ],
+    "test.dq_warehouse.not_null_stg_customers_signup_date.ef12d9c335": [
+      "model.dq_warehouse.stg_customers"
+    ],
+    "test.dq_warehouse.not_null_stg_order_items_order_id.2063801f96": [
+      "model.dq_warehouse.stg_order_items"
+    ],
+    "test.dq_warehouse.not_null_stg_order_items_order_item_id.26a7e2bc35": [
+      "model.dq_warehouse.stg_order_items"
+    ],
+    "test.dq_warehouse.not_null_stg_orders_customer_id.af79d5e4b5": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.not_null_stg_orders_order_id.81cfe2fe64": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.not_null_stg_orders_order_ts.84e5059ca1": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.not_null_stg_orders_total_amount.f31d98d41b": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.not_null_stg_payments_amount.4739fb3aea": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.not_null_stg_payments_order_id.601cf57649": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.not_null_stg_payments_payment_id.c19cc50075": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.not_null_stg_products_price.2d147627d4": [
+      "model.dq_warehouse.stg_products"
+    ],
+    "test.dq_warehouse.not_null_stg_products_product_id.6373b0acf3": [
+      "model.dq_warehouse.stg_products"
+    ],
+    "test.dq_warehouse.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54": [
+      "model.dq_warehouse.stg_order_items",
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.relationships_stg_order_items_product_id__product_id__ref_stg_products_.886a82c26c": [
+      "model.dq_warehouse.stg_order_items",
+      "model.dq_warehouse.stg_products"
+    ],
+    "test.dq_warehouse.relationships_stg_orders_customer_id__customer_id__ref_stg_customers_.430bf21500": [
+      "model.dq_warehouse.stg_customers",
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3": [
+      "model.dq_warehouse.stg_orders",
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.unique_stg_customers_customer_id.c7614daada": [
+      "model.dq_warehouse.stg_customers"
+    ],
+    "test.dq_warehouse.unique_stg_order_items_order_item_id.90e333a108": [
+      "model.dq_warehouse.stg_order_items"
+    ],
+    "test.dq_warehouse.unique_stg_orders_order_id.e3b841c71a": [
+      "model.dq_warehouse.stg_orders"
+    ],
+    "test.dq_warehouse.unique_stg_payments_payment_id.3744510712": [
+      "model.dq_warehouse.stg_payments"
+    ],
+    "test.dq_warehouse.unique_stg_products_product_id.7d950a1467": [
+      "model.dq_warehouse.stg_products"
+    ]
+  },
+  "sources": {
+    "source.dq_warehouse.raw.customers": {
+      "identifier": "customers",
+      "name": "customers",
+      "resource_type": "source",
+      "schema": "raw",
+      "unique_id": "source.dq_warehouse.raw.customers"
+    },
+    "source.dq_warehouse.raw.order_items": {
+      "identifier": "order_items",
+      "name": "order_items",
+      "resource_type": "source",
+      "schema": "raw",
+      "unique_id": "source.dq_warehouse.raw.order_items"
+    },
+    "source.dq_warehouse.raw.orders": {
+      "identifier": "orders",
+      "name": "orders",
+      "resource_type": "source",
+      "schema": "raw",
+      "unique_id": "source.dq_warehouse.raw.orders"
+    },
+    "source.dq_warehouse.raw.payments": {
+      "identifier": "payments",
+      "name": "payments",
+      "resource_type": "source",
+      "schema": "raw",
+      "unique_id": "source.dq_warehouse.raw.payments"
+    },
+    "source.dq_warehouse.raw.products": {
+      "identifier": "products",
+      "name": "products",
+      "resource_type": "source",
+      "schema": "raw",
+      "unique_id": "source.dq_warehouse.raw.products"
+    }
+  }
+}

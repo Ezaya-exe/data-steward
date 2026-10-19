@@ -31,3 +31,7 @@ class CheckError(DqsError):
 
 class DatabaseError(DqsError):
     """The warehouse is unreachable, or init/reset/DDL failed."""
+
+
+class LineageError(DqsError):
+    """(dbt) lineage cannot be read/built: missing manifest, unknown node, bad SQL."""

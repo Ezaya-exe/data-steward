@@ -90,3 +90,19 @@ class ResolutionType(StrEnum):
     PR = "PR"
     ISSUE = "ISSUE"
     NONE = "NONE"
+
+
+class ImpactScope(StrEnum):
+    """How narrowly the blast radius was scoped (Phase 3, ARCHITECTURE §9).
+
+    - ``column``: schema/column drift on a specific column — column-level
+      lineage restricted the models to those referencing it.
+    - ``table``: a table-scoped fault with no specific column (volume, absent
+      table) — everything downstream of that one raw table.
+    - ``warehouse``: batch-level lateness/missing batch — downstream of ALL
+      raw tables (the DAG's whole reachable set).
+    """
+
+    COLUMN = "column"
+    TABLE = "table"
+    WAREHOUSE = "warehouse"

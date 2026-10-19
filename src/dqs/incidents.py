@@ -264,6 +264,23 @@ def get_incident(engine: Engine, incident_id: uuid.UUID) -> Incident | None:
     return None if row is None else _row_to_incident(row)
 
 
+def save_impact(engine: Engine, incident_id: uuid.UUID, impact: dict[str, Any]) -> None:
+    """Persist an ImpactReport (already serialized) into `dq.incidents.impact`.
+
+    The §4.3 column exists for exactly this; storing the report makes the
+    assessment survive long after the manifest/run record changed underneath.
+    """
+    now = dt.datetime.now(dt.UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE dq.incidents SET impact = CAST(:i AS jsonb), updated_at = :now "
+                "WHERE incident_id = :id"
+            ),
+            {"i": json.dumps(impact), "now": now, "id": incident_id},
+        )
+
+
 def _row_to_incident(row: Row[Any]) -> Incident:
     (
         incident_id,

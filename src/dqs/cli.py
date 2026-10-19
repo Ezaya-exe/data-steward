@@ -35,6 +35,8 @@ from dqs.config import load_settings
 from dqs.contracts import generation as contracts_generation
 from dqs.contracts import store as contracts_store
 from dqs.errors import DqsError, FaultSpecError
+from dqs.lineage.graph import LineageGraph
+from dqs.lineage.impact import build_impact_report
 from dqs.models.contract import Contract
 from dqs.models.faults import FaultSpec
 from dqs.models.violation import Violation
@@ -50,6 +52,7 @@ contracts_app = typer.Typer(help="Data contract generation and approval (§7).")
 check_app = typer.Typer(help="Run the deterministic check engine by hand (§7.3).")
 monitor_app = typer.Typer(help="The batch monitor: run checks and record incidents (§8).")
 incidents_app = typer.Typer(help="Inspect recorded incidents.")
+impact_app = typer.Typer(help="Impact analysis for an incident (deterministic lineage, §9).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
@@ -58,6 +61,7 @@ app.add_typer(contracts_app, name="contracts")
 app.add_typer(check_app, name="check")
 app.add_typer(monitor_app, name="monitor")
 app.add_typer(incidents_app, name="incidents")
+app.add_typer(impact_app, name="impact")
 
 console = Console()
 
@@ -385,6 +389,66 @@ def incidents_show(
         f"  created {incident.created_at.isoformat()}  updated {incident.updated_at.isoformat()}"
     )
     _print_violations(incident.violations)
+
+
+@impact_app.command()
+def impact(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+) -> None:
+    """Print the deterministic blast radius of one incident (ARCH §9).
+
+    Reads the checked-out dbt manifest (regenerated via `dbt compile` when
+    missing/stale), the stored failing-node record from `dq.pipeline_runs`
+    and the incident's violations; persists the report into `dq.incidents.impact`.
+    """
+    try:
+        identifier = uuid.UUID(incident_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+        if incident is None:
+            _fail(DqsError(f"no incident with id {incident_id}"))
+        graph = LineageGraph.from_manifest()
+        record = dbt_run.latest_run_for_batch(engine, incident.batch_id)
+        report = build_impact_report(graph, incident, record)
+        incidents_mod.save_impact(engine, identifier, report.model_dump(mode="json"))
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+
+    console.print(
+        f"impact for {str(report.incident_id)[:8]} [{report.scope.value}] "
+        f"source {report.source_table or '-'}"
+        f"{' (column ' + report.column + ')' if report.column else ''}"
+    )
+    console.print(f"  summary: {report.summary}")
+    table = Table(show_header=True, header_style="bold")
+    for column in ("model", "layer", "distance", "column-lineage"):
+        table.add_column(column)
+    for model in report.affected_models:
+        table.add_row(
+            model.name, model.layer, str(model.distance),
+            "yes" if model.referencing_column else "-",
+        )
+    console.print(table)
+    if report.failing_tests:
+        tests = Table(show_header=True, header_style="bold")
+        for column in ("failing dbt node (stored record)", "status", "batch"):
+            tests.add_column(column)
+        for node in report.failing_tests:
+            tests.add_row(node.name, node.status, node.batch_id or "-")
+        console.print(tests)
+    exposures = Table(show_header=True, header_style="bold")
+    for column in ("exposure", "owner", "maturity"):
+        exposures.add_column(column)
+    for exposure in report.affected_exposures:
+        exposures.add_row(exposure.name, exposure.owner or "-", exposure.maturity)
+    console.print(exposures)
+    console.print(f"[bold]blast radius score: {report.blast_radius_score}[/bold]")
 
 
 def _check_engine(engine: Engine) -> CheckEngine:

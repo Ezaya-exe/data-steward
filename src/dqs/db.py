@@ -29,7 +29,12 @@ logger = logging.getLogger(__name__)
 # from user input, so no allowlist is needed (AGENTS.md §6 allows constants).
 SCHEMAS: Final = ("raw", "staging", "marts", "dq")
 SQL_DIR: Final = Path(__file__).resolve().parents[2] / "sql"
-INIT_SQL_FILES: Final = ("000_roles.sql", "001_init.sql")
+INIT_SQL_FILES: Final = (
+    "000_roles.sql",
+    "001_init.sql",
+    # 002 (Phase 3) is idempotent and adds missing columns to existing DBs too.
+    "002_pipeline_run_failures.sql",
+)
 
 
 def make_rw_engine(settings: Settings) -> Engine:
