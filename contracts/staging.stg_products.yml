@@ -35,7 +35,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: staging
 primary_key:
 - product_id
-status: approved
+status: draft
 table: staging.stg_products
 volume:
   max_rows: 300

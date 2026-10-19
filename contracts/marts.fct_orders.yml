@@ -92,7 +92,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: marts
 primary_key:
 - order_id
-status: approved
+status: draft
 table: marts.fct_orders
 volume:
   max_rows: 20837
