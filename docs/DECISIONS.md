@@ -189,3 +189,72 @@ entry each; newest last.
     findings stay empty while `arrived_at - scheduled` exceeds
     `freshness.max_delay_minutes` — detection belongs to the Phase 2b
     freshness check, which reads `dq.batches.arrived_at`.
+
+## Phase 2b — task 3/4: checks, incidents, monitor (2026-10-19)
+
+44. **Contracts are approved in place, and the determinism test compares every
+    byte except the `status:` line.** Generation always writes `draft`; the
+    owner approves with `dqs contracts approve --all` (the human step, §7.2).
+    So `test_regenerated_contracts_are_byte_identical_to_committed` normalizes
+    `status:` on both sides (a guard asserts the committed catalog really is
+    `approved` everywhere) and still fails on any other difference.
+45. **Value-level checks never cascade off a missing column, and schema checks
+    never cascade off an absent table.** `type.logical`, `nulls.rate`,
+    `unique.pk`, `fk.integrity`, `range.bounds` and `volume.rows` iterate only
+    `present_columns ∩ contract.columns`, so a column absent from the batch
+    header (F1's renamed side, F2) is reported *solely* by
+    `schema.missing_column`. A wholly absent table (F9) is owned by
+    `volume.rows` when `required_in_batch: true`; `schema.missing_column`/
+    `schema.unexpected_column` stay silent for it, so F9 is one violation, not
+    one per contract column.
+46. **`Violation` extends §7.3 with `batch_id` and an optional `table`**:
+    `batch_id` is the producing batch (it is what makes an incident's batch list
+    grow across days) and `table=None` marks the batch-level checks
+    (`freshness.sla`, `monitor.missing_batch`). Every other field keeps the
+    documented meaning.
+47. **`IncidentStatus` is a `StrEnum`** (`open | investigating |
+    awaiting_approval | resolved | rejected | failed`) in `models/enums.py`, so
+    incident status is a typed value that matches `dq.incidents.status` exactly.
+48. **Fingerprint = `sha1(table | check | column)`** with `""` for a missing
+    part, taken from a deterministic *representative* violation (max severity,
+    then sorted check/column/message). Violations group by `(batch_id, table)`
+    into one incident (severity = max of the group). A fault recurring on
+    consecutive days therefore maps to the same fingerprint and merges into the
+    one open incident instead of creating a second; the merge de-duplicates by
+    `(batch_id, check, column, message)`.
+49. **`volume.initial_load_excluded` makes DECISION 36 enforceable.** The
+    generator omits the day-1 initial load when it fits dimension volume bounds
+    and now records that on the contract; `volume.rows` exempts exactly the
+    batch whose business date equals `baseline.first`. Reason: enforcement must
+    mirror generation or a clean baseline fails on its own first day — a real
+    false positive the acceptance probe surfaced (customers day-1 = 2000 vs
+    bounds [21, 68]; products day-1 = 200 vs [0, 20]).
+50. **`range.bounds` ignores the batch-mean signal for a sample smaller than
+    `_MIN_MEAN_SAMPLE = 2` non-null values.** With one value the "mean" *is*
+    that value, so mean bounds cannot distinguish a systematic shift (F7) from a
+    single odd row; the isolated-value `range` signal still applies. Real false
+    positive found by the edge-case unit tests.
+51. **The monitor checks raw batches only (batch scope).** `CheckEngine.run(batch_id)`
+    is the §7.3 batch path; `CheckEngine.run_table(table)` enforces a staged/marts
+    snapshot (the scope Phase 5 §11 fix-verification reuses). `dqs monitor run`
+    does not run staged snapshots yet — documented limitation until Phase 5
+    wires the staged path.
+52. **The monitor is driven by an explicit `as_of` watermark.** `dqs monitor run`
+    defaults `--as-of` to `max(business_date) + 1 day 00:00 UTC`, falling back to
+    now(UTC) on an empty warehouse; `unchecked_batches` selects
+    `status <> 'checked' AND business_date <= as_of.date`. This is why a
+    contiguous clean warehouse yields zero incidents without a wall-clock
+    argument. `monitor.missing_batch` walks every business date from the first
+    present row to `as_of.date − 1` and flags the ones with no `dq.batches` row;
+    it runs even when there are zero approved contracts (a missing date is a
+    fact, not a table rule).
+53. **Phase 2b acceptance uses a template database.** `test_monitor_e2e.py`
+    seeds the 30-day baseline once into `dqs_monitor_template` and clones it per
+    test with `CREATE DATABASE … TEMPLATE` (clones dropped afterwards; the dev
+    warehouse is never touched). Fault days start the day after a shared clean
+    window and every scenario loads days **contiguously**, because customer ids
+    are date-slotted (DECISION 18): a skipped day makes clean FK values look
+    orphaned — an artifact, not a defect.
+54. **Repaired six non-UTF-8 (cp1252) bytes in `docs/DECISIONS.md`** (em dash,
+    ×, ±). They predated this phase and made `ruff format --check .` fail
+    repo-wide ("stream did not contain valid UTF-8"); the file is now UTF-8.
