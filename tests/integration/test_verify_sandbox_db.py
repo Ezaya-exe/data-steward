@@ -306,6 +306,8 @@ def test_bad_patch_with_a_syntax_error_fails_dbt_build_with_an_excerpt(
     assert result.dbt_exit_code not in (None, 0)
     assert result.dbt_log_excerpt
     assert "Error" in result.dbt_log_excerpt or "error" in result.dbt_log_excerpt
+    detail = {c.name: c.detail for c in result.criteria}
+    assert "no staging table" in detail["targeted_check"]
     _assert_no_sandbox(engine)
 
 
