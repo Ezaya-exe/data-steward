@@ -21,11 +21,13 @@ used on any provider error that may echo a key back.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, cast
+from email.utils import parsedate_to_datetime
+from typing import Any, Final, cast
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -209,7 +211,94 @@ class LLMCallRecord(BaseModel):
     output_tokens: int = 0
     total_tokens: int = 0
     tool_calls: int = 0
+    retries: int = 0
     error: str | None = None
+
+
+class RetryRecord(BaseModel):
+    """One retry decision, emitted to the investigator's step log."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int  # 1-based retry number
+    status_code: int
+    delay_seconds: float
+    total_wait_seconds: float
+    error: str
+
+
+# Only transient provider conditions are retried. A malformed request, an
+# invalid key or a validation error is deterministic: retrying it wastes time
+# and can hide the real problem (AGENTS.md §7.7).
+RETRYABLE_STATUS_CODES: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
+
+
+def _as_int(value: object) -> int | None:
+    """An integer status code, excluding bool (which is an int in Python)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def exception_status_code(exc: BaseException) -> int | None:
+    """Best-effort HTTP status of a provider exception, without provider imports.
+
+    Different SDKs expose the status differently (`status_code`,
+    `response.status_code`, gRPC-style `code`). Class-name fallbacks cover the
+    common Google exceptions, whose `code` is not an HTTP number.
+    """
+    for attribute in ("status_code", "http_status", "status"):
+        status = _as_int(getattr(exc, attribute, None))
+        if status is not None:
+            return status
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = _as_int(getattr(response, "status_code", None))
+        if status is not None:
+            return status
+    code = getattr(exc, "code", None)
+    status = _as_int(code)
+    if status is not None:
+        return status
+    # google.api_core exceptions: code is a gRPC StatusCode enum whose value is
+    # a (number, name) tuple. The numbers (8/14) are not HTTP statuses.
+    name = type(exc).__name__.lower()
+    if "resourceexhausted" in name or "ratelimit" in name:
+        return 429
+    if "unavailable" in name:
+        return 503
+    if "deadlineexceeded" in name:
+        return 504
+    if "internalserver" in name:
+        return 500
+    return None
+
+
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """Parse `Retry-After` (seconds or HTTP-date) from the provider response."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    value = getter("retry-after") or getter("Retry-After")
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        moment = parsedate_to_datetime(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.UTC)
+    return max(0.0, (moment - dt.datetime.now(dt.UTC)).total_seconds())
 
 
 def _usage_counts(response: Any) -> tuple[int, int, int]:
@@ -278,11 +367,23 @@ class LLMClient:
         provider: str,
         model: str,
         budget: BudgetTracker | None = None,
+        max_retries: int = 3,
+        max_retry_wait_seconds: float = 30.0,
+        retry_base_seconds: float = 1.0,
+        sleep: Callable[[float], None] = time.sleep,
+        on_retry: Callable[[RetryRecord], None] | None = None,
+        secret_values: Sequence[str] | None = None,
     ) -> None:
         self.chat = chat
         self.provider = provider
         self.model = model
         self.budget = budget
+        self.max_retries = max(0, int(max_retries))
+        self.max_retry_wait_seconds = max(0.0, float(max_retry_wait_seconds))
+        self.retry_base_seconds = max(0.0, float(retry_base_seconds))
+        self._sleep = sleep
+        self.on_retry = on_retry
+        self._secret_values = list(secret_values) if secret_values is not None else None
         self.calls: list[LLMCallRecord] = []
 
     @classmethod
@@ -300,6 +401,10 @@ class LLMClient:
             provider=provider,
             model=model,
             budget=budget or BudgetTracker.from_settings(resolved),
+            max_retries=resolved.llm_max_retries,
+            max_retry_wait_seconds=resolved.llm_retry_max_wait_seconds,
+            retry_base_seconds=resolved.llm_retry_base_seconds,
+            secret_values=settings_secrets(resolved),
         )
 
     def invoke(self, messages: Any, **kwargs: Any) -> AIMessage:
@@ -313,29 +418,83 @@ class LLMClient:
         runnable = self.chat.with_structured_output(schema, include_raw=True)
         return StructuredLLMClient(self, runnable)
 
+    def _secrets(self) -> Sequence[str]:
+        if self._secret_values is not None:
+            return self._secret_values
+        return settings_secrets(load_settings())
+
+    def _record_failure(self, started: float, error: str, retries: int) -> None:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        self.calls.append(
+            LLMCallRecord(
+                provider=self.provider,
+                model=self.model,
+                latency_ms=latency_ms,
+                retries=retries,
+                error=error,
+            )
+        )
+        logger.warning(
+            "llm call failed provider=%s model=%s latency_ms=%s retries=%s error=%s",
+            self.provider,
+            self.model,
+            latency_ms,
+            retries,
+            error,
+        )
+
     def _run(self, runnable: Runnable[Any, Any], messages: Any, **kwargs: Any) -> Any:
         started = time.perf_counter()
-        try:
-            response = runnable.invoke(messages, **kwargs)
-        except Exception as exc:
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            error = redact_secrets(str(exc), secrets=settings_secrets(load_settings()))
-            self.calls.append(
-                LLMCallRecord(
-                    provider=self.provider,
-                    model=self.model,
-                    latency_ms=latency_ms,
+        retries = 0
+        total_wait = 0.0
+        while True:
+            try:
+                response = runnable.invoke(messages, **kwargs)
+                break
+            except Exception as exc:
+                error = redact_secrets(str(exc), secrets=self._secrets())
+                status = exception_status_code(exc)
+                if (
+                    status is None
+                    or status not in RETRYABLE_STATUS_CODES
+                    or retries >= self.max_retries
+                ):
+                    self._record_failure(started, error, retries)
+                    raise
+                backoff = self.retry_base_seconds * (2**retries)
+                requested = retry_after_seconds(exc)
+                delay = requested if requested is not None else backoff
+                if total_wait + delay > self.max_retry_wait_seconds:
+                    reason = (
+                        f"retry not attempted: waiting {delay:.1f}s would exceed the "
+                        f"{self.max_retry_wait_seconds:.1f}s total retry budget"
+                    )
+                    self._record_failure(started, f"{error} ({reason})", retries)
+                    raise
+                retries += 1
+                total_wait += delay
+                retry_record = RetryRecord(
+                    attempt=retries,
+                    status_code=status,
+                    delay_seconds=round(delay, 3),
+                    total_wait_seconds=round(total_wait, 3),
                     error=error,
                 )
-            )
-            logger.warning(
-                "llm call failed provider=%s model=%s latency_ms=%s error=%s",
-                self.provider,
-                self.model,
-                latency_ms,
-                error,
-            )
-            raise
+                logger.warning(
+                    "llm retry provider=%s model=%s attempt=%s status=%s delay=%.3fs",
+                    self.provider,
+                    self.model,
+                    retries,
+                    status,
+                    delay,
+                )
+                if self.on_retry is not None:
+                    try:
+                        self.on_retry(retry_record)
+                    except Exception as hook_exc:  # observability must not break the call
+                        logger.warning("retry step-log hook failed: %s", hook_exc)
+                self._sleep(delay)
+
         latency_ms = int((time.perf_counter() - started) * 1000)
         # Structured-output runnables return {"raw": AIMessage, "parsed": ...};
         # measure the raw message, not the dict wrapper.
@@ -352,17 +511,19 @@ class LLMClient:
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             tool_calls=len(response_tool_calls),
+            retries=retries,
         )
         self.calls.append(record)
         if self.budget is not None:
             self.budget.record_llm_call(record)
         logger.debug(
-            "llm call provider=%s model=%s latency_ms=%s tokens=%s tool_calls=%s",
+            "llm call provider=%s model=%s latency_ms=%s tokens=%s tool_calls=%s retries=%s",
             self.provider,
             self.model,
             latency_ms,
             total_tokens,
             len(response_tool_calls),
+            retries,
         )
         return response
 

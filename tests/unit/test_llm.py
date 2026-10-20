@@ -6,13 +6,18 @@ tests (AGENTS.md §7.9); benchmark numbers are never taken from it.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 
 from dqs.agents.llm import (
     BudgetTracker,
     FakeChatModel,
     LLMCallRecord,
     LLMClient,
+    RetryRecord,
     get_llm,
     redact_secrets,
 )
@@ -213,6 +218,128 @@ def test_client_raises_when_a_call_exceeds_the_token_budget(settings: Settings) 
     with pytest.raises(BudgetExceeded, match="token budget"):
         client.invoke("hello")
     assert len(client.calls) == 1  # the call is still measured before the raise
+
+
+class _Response:
+    def __init__(self, retry_after: str | None = None) -> None:
+        self.headers = {} if retry_after is None else {"retry-after": retry_after}
+        self.status_code = 429
+
+
+class _ProviderError(RuntimeError):
+    """Stands in for a provider SDK error without importing the SDK."""
+
+    def __init__(self, status: int, retry_after: str | None = None) -> None:
+        super().__init__(f"provider error {status}")
+        self.status_code = status
+        self.response = _Response(retry_after)
+
+
+class _FlakyRunnable:
+    def __init__(self, failures: list[BaseException]) -> None:
+        self.failures = list(failures)
+        self.calls = 0
+
+    def invoke(self, messages: Any, **kwargs: Any) -> AIMessage:
+        _ = messages, kwargs
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        message = AIMessage(content="recovered")
+        message.usage_metadata = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        return message
+
+
+def _flaky_client(runnable: _FlakyRunnable, **kwargs: Any) -> LLMClient:
+    return LLMClient(
+        cast(BaseChatModel, runnable),
+        provider="fake",
+        model="flaky",
+        secret_values=[],
+        **kwargs,
+    )
+
+
+def test_retry_on_429_then_success() -> None:
+    runnable = _FlakyRunnable([_ProviderError(429)])
+    slept: list[float] = []
+    retries: list[RetryRecord] = []
+    client = _flaky_client(
+        runnable,
+        max_retries=2,
+        sleep=slept.append,
+        on_retry=retries.append,
+    )
+    response = client.invoke("hello")
+    assert response.content == "recovered"
+    assert runnable.calls == 2
+    assert slept == [1.0]
+    assert len(retries) == 1
+    assert retries[0].status_code == 429
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert (call.input_tokens, call.output_tokens, call.total_tokens) == (10, 2, 12)
+    assert call.retries == 1
+    assert call.error is None
+
+
+def test_retry_honours_retry_after() -> None:
+    runnable = _FlakyRunnable([_ProviderError(503, retry_after="0.25")])
+    slept: list[float] = []
+    client = _flaky_client(runnable, max_retries=1, sleep=slept.append)
+    client.invoke("hello")
+    assert slept == [0.25]
+    assert client.calls[0].retries == 1
+
+
+def test_retry_uses_exponential_backoff() -> None:
+    runnable = _FlakyRunnable([_ProviderError(500), _ProviderError(502)])
+    slept: list[float] = []
+    client = _flaky_client(runnable, max_retries=2, sleep=slept.append)
+    client.invoke("hello")
+    assert slept == [1.0, 2.0]
+    assert client.calls[0].retries == 2
+
+
+def test_non_retryable_error_is_not_retried() -> None:
+    runnable = _FlakyRunnable([_ProviderError(400)])
+    slept: list[float] = []
+    retries: list[RetryRecord] = []
+    client = _flaky_client(
+        runnable, max_retries=3, sleep=slept.append, on_retry=retries.append
+    )
+    with pytest.raises(_ProviderError):
+        client.invoke("hello")
+    assert runnable.calls == 1
+    assert slept == []
+    assert retries == []
+    assert client.calls[0].retries == 0
+    assert client.calls[0].error is not None
+
+
+def test_retry_stops_at_max_retries() -> None:
+    runnable = _FlakyRunnable([_ProviderError(429) for _ in range(10)])
+    slept: list[float] = []
+    client = _flaky_client(runnable, max_retries=3, sleep=slept.append)
+    with pytest.raises(_ProviderError):
+        client.invoke("hello")
+    assert runnable.calls == 4  # initial + 3 retries
+    assert len(slept) == 3
+    assert client.calls[0].retries == 3
+
+
+def test_retry_after_beyond_the_total_wait_budget_is_not_slept() -> None:
+    runnable = _FlakyRunnable([_ProviderError(429, retry_after="120")])
+    slept: list[float] = []
+    client = _flaky_client(
+        runnable, max_retries=3, max_retry_wait_seconds=30.0, sleep=slept.append
+    )
+    with pytest.raises(_ProviderError):
+        client.invoke("hello")
+    assert runnable.calls == 1
+    assert slept == []
+    assert client.calls[0].error is not None
+    assert "retry budget" in client.calls[0].error
 
 
 def test_smoke_runs_all_four_probes_on_fake() -> None:

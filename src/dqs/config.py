@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     incident_timeout_seconds: int = 300
     dqs_seed: int = 42
 
+    # Transient provider failures: retry only HTTP 429/5xx (AGENTS.md §7.7).
+    # The total wait is a hard cap, so a huge Retry-After cannot stall an
+    # incident; the loop escalates instead.
+    llm_max_retries: int = 3
+    llm_retry_max_wait_seconds: float = 30.0
+    llm_retry_base_seconds: float = 1.0
+
     # Observability (Phase 9, optional)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
