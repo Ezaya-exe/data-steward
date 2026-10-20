@@ -35,7 +35,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: raw
 primary_key:
 - product_id
-status: draft
+status: approved
 table: raw.products
 volume:
   initial_load_excluded: true

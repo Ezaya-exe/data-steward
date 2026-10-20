@@ -38,7 +38,7 @@ freshness:
 generated_at: '2026-01-30T00:00:00Z'
 layer: marts
 primary_key: []
-status: draft
+status: approved
 table: marts.fct_daily_revenue
 volume:
   max_rows: 45

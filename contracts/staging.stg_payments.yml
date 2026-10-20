@@ -38,7 +38,7 @@ generated_at: '2026-01-30T00:00:00Z'
 layer: staging
 primary_key:
 - payment_id
-status: draft
+status: approved
 table: staging.stg_payments
 volume:
   max_rows: 21885
