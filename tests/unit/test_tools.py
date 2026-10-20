@@ -19,6 +19,7 @@ from sqlalchemy import Engine
 
 from dqs.contracts.profiler import BatchTableProfile, ColumnBatchStats
 from dqs.dbt_run import PROJECT_DIR
+from dqs.errors import ToolError
 from dqs.lineage.graph import LineageGraph
 from dqs.models.enums import LogicalType
 from dqs.tools.base import ToolContext, data_tool, wrap_data
@@ -32,6 +33,43 @@ from dqs.tools.renames import rank_rename_candidates
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "manifest_fixture.json"
 
 
+class _RoleConnection:
+    """Minimal SQLAlchemy connection double for the ToolContext role check."""
+
+    def __init__(self, role: str) -> None:
+        self._role = role
+
+    def __enter__(self) -> _RoleConnection:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def execute(self, _statement: object) -> _RoleResult:
+        return _RoleResult(self._role)
+
+
+class _RoleResult:
+    def __init__(self, role: str) -> None:
+        self._role = role
+
+    def scalar_one(self) -> str:
+        return self._role
+
+
+class _RoleEngine:
+    """Stands in for the ro engine in file-only unit tests (no query runs)."""
+
+    def __init__(self, role: str = "dqs_ro") -> None:
+        self._role = role
+
+    def connect(self) -> _RoleConnection:
+        return _RoleConnection(self._role)
+
+    def dispose(self) -> None:
+        return None
+
+
 def _payload(output: str) -> Any:
     assert output.startswith("<data>") and output.endswith("</data>")
     return json.loads(output[len("<data>") : -len("</data>")])
@@ -39,7 +77,7 @@ def _payload(output: str) -> Any:
 
 def _dummy_context(contracts_dir: Path = Path("contracts")) -> ToolContext:
     # Only file-reading/lineage tools are used with this context; no query runs.
-    return ToolContext(engine=cast(Engine, None), contracts_dir=contracts_dir)
+    return ToolContext(engine=cast(Engine, _RoleEngine()), contracts_dir=contracts_dir)
 
 
 def test_wrap_data_is_compact_and_parseable() -> None:
@@ -152,7 +190,7 @@ def test_tool_error_is_returned_as_data_not_raised(tmp_path: Path) -> None:
 
 
 def test_get_model_sql_reads_the_real_dbt_model() -> None:
-    context = ToolContext(engine=cast(Engine, None), project_dir=PROJECT_DIR)
+    context = ToolContext(engine=cast(Engine, _RoleEngine()), project_dir=PROJECT_DIR)
     body = _payload(get_model_sql(context, "stg_orders"))
     assert body["model"] == "stg_orders"
     assert "select" in body["sql"].lower()
@@ -178,3 +216,18 @@ def test_data_tool_wraps_hostile_text_as_data() -> None:
     body = _payload(output)
     assert "IGNORE PREVIOUS INSTRUCTIONS" in body["rows"][0]["note"]
     assert output.startswith("<data>")
+
+
+def test_tool_context_accepts_the_readonly_role() -> None:
+    context = ToolContext(engine=cast(Engine, _RoleEngine("dqs_ro")))
+    assert context.engine is not None
+
+
+def test_tool_context_rejects_the_read_write_role() -> None:
+    with pytest.raises(ToolError, match="dqs_ro"):
+        ToolContext(engine=cast(Engine, _RoleEngine("dqs")))
+
+
+def test_tool_context_rejects_an_unreachable_engine() -> None:
+    with pytest.raises(ToolError, match="role check failed"):
+        ToolContext(engine=cast(Engine, None))

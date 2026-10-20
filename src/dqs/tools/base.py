@@ -26,15 +26,18 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dqs.contracts.profiler import IDENTIFIER_RE
 from dqs.dbt_run import PROJECT_DIR
 from dqs.errors import DqsError, ToolError
 from dqs.lineage.graph import LineageGraph
+
+if TYPE_CHECKING:
+    from dqs.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,10 @@ DATA_CLOSE = "</data>"
 ALLOWED_SCHEMAS = frozenset({"raw", "staging", "marts", "dq"})
 RAW_SCHEMA = "raw"
 SYSTEM_COLUMNS = frozenset({"_batch_id", "_loaded_at"})
+# The agent tools are only allowed to run as the documented read-only role.
+# This is checked against the *actual* database session, not the URL in
+# Settings: an engine URL can be edited, a role cannot be spoofed by accident.
+READONLY_ROLE: Final = "dqs_ro"
 
 
 def validate_identifier(value: str, *, kind: str = "identifier") -> str:
@@ -165,15 +172,65 @@ def data_tool[**P](func: Callable[P, Any]) -> Callable[P, str]:
 
 @dataclass
 class ToolContext:
-    """Dependencies shared by every tool in one investigation."""
+    """Dependencies shared by every tool in one investigation.
+
+    Construction verifies the *live* database role (not the engine URL), so a
+    caller cannot accidentally hand the investigator the read/write engine
+    (Phase-4a review, weak point 3). File-only tools still need a context, so
+    tests pass a stub engine whose `SELECT current_user` answers `dqs_ro`.
+    """
 
     engine: Engine
     contracts_dir: Path = Path("contracts")
     project_dir: Path = PROJECT_DIR
     _graph: LineageGraph | None = field(default=None, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        self._assert_readonly_role()
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Settings,
+        *,
+        contracts_dir: Path = Path("contracts"),
+        project_dir: Path = PROJECT_DIR,
+    ) -> ToolContext:
+        """The one supported factory: build the engine with `make_ro_engine`.
+
+        Imported lazily to keep `tools` independent of the DB bootstrap module
+        at import time (and to avoid a cycle through `db` → `config`).
+        """
+        from dqs import db as dbmod
+
+        return cls(
+            engine=dbmod.make_ro_engine(settings),
+            contracts_dir=contracts_dir,
+            project_dir=project_dir,
+        )
+
+    def _assert_readonly_role(self) -> None:
+        """Refuse anything but the `dqs_ro` role before any tool can run."""
+        try:
+            with self.engine.connect() as conn:
+                role = str(conn.execute(text("SELECT current_user")).scalar_one())
+        except (SQLAlchemyError, AttributeError) as exc:
+            raise ToolError(
+                "ToolContext needs a reachable read-only database engine; "
+                f"role check failed: {exc}"
+            ) from exc
+        if role != READONLY_ROLE:
+            raise ToolError(
+                f"ToolContext refuses database role {role!r}; "
+                f"agent tools may only run as {READONLY_ROLE!r}"
+            )
+
     def graph(self) -> LineageGraph:
         """Build the manifest DAG once per context (not once per lineage call)."""
         if self._graph is None:
             self._graph = LineageGraph.from_manifest(project_dir=self.project_dir)
         return self._graph
+
+    def close(self) -> None:
+        """Release the pooled connections held by this context's engine."""
+        self.engine.dispose()

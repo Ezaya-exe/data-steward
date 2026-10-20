@@ -12,7 +12,8 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from dqs.errors import SqlExecutionError
+from dqs.errors import SqlExecutionError, ToolError
+from dqs.tools.base import ToolContext
 from dqs.tools.sql_guard import execute_readonly
 
 pytestmark = pytest.mark.integration
@@ -57,3 +58,14 @@ def test_statement_timeout_is_enforced(ro_engine: Engine) -> None:
     )
     with pytest.raises(SqlExecutionError, match="timeout|canceling"):
         execute_readonly(ro_engine, endless, timeout_ms=200)
+
+
+def test_tool_context_accepts_the_real_ro_engine(ro_engine: Engine) -> None:
+    context = ToolContext(engine=ro_engine)
+    assert context.engine is ro_engine
+
+
+def test_tool_context_rejects_the_real_rw_engine(rw_engine: Engine) -> None:
+    """The role check must reject the engine that can write, not just a stub."""
+    with pytest.raises(ToolError, match="dqs_ro"):
+        ToolContext(engine=rw_engine)
