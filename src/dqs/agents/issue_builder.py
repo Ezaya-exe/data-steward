@@ -123,13 +123,16 @@ def build_issue(
 
     `resolution` is required rather than re-derived: the caller already routed
     the incident, and the issue must state the decision that was actually made.
-    The three inputs must refer to the same incident; a mismatch is a wiring bug,
-    not something to paper over.
+    Only ISSUE is valid here; PR needs a fix and NONE needs no action. The three
+    inputs must refer to the same incident; a mismatch is a wiring bug, not
+    something to paper over.
     """
     if impact.incident_id != incident.incident_id:
         raise IssueBuildError("impact report belongs to a different incident")
     if resolution is ResolutionType.PR:
         raise IssueBuildError("a PR-routed incident must be fixed, not filed as an issue")
+    if resolution is ResolutionType.NONE:
+        raise IssueBuildError("a NONE-routed incident needs no issue")
 
     title = _title(incident, root_cause)
     lines: list[str] = [f"# {title}", ""]

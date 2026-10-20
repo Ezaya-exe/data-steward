@@ -316,6 +316,11 @@ def test_pr_routing_cannot_be_written_as_an_issue() -> None:
         build_issue(_incident(), _root_cause(), _impact(), resolution=ResolutionType.PR)
 
 
+def test_none_routing_cannot_be_written_as_an_issue() -> None:
+    with pytest.raises(IssueBuildError, match="NONE-routed"):
+        build_issue(_incident(), _root_cause(), _impact(), resolution=ResolutionType.NONE)
+
+
 def test_hostile_multiline_text_cannot_break_the_heading_layout() -> None:
     root_cause = _root_cause().model_copy(
         update={
