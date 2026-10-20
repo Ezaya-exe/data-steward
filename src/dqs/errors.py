@@ -59,3 +59,11 @@ class SqlExecutionError(DqsError):
 
 class ToolError(DqsError):
     """An agent tool could not answer (bad input, missing row, unsafe identifier)."""
+
+
+class FixPlanError(DqsError):
+    """A fix plan violated the allowlist, relevance rule, size limit, or exact match."""
+
+
+class SandboxError(DqsError):
+    """The sandbox could not be prepared, built, or cleaned up."""
