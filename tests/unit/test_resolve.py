@@ -61,9 +61,7 @@ def test_zero_confidence_is_an_issue(category: RootCauseCategory) -> None:
 
 def test_source_column_added_is_none_even_at_full_confidence_with_a_model() -> None:
     assert (
-        plan_resolution(
-            RootCauseCategory.SOURCE_COLUMN_ADDED, 1.0, has_candidate_model=True
-        )
+        plan_resolution(RootCauseCategory.SOURCE_COLUMN_ADDED, 1.0, has_candidate_model=True)
         is ResolutionType.NONE
     )
 
