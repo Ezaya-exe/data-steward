@@ -1,29 +1,46 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-20 (Phase 5a complete) · Do not treat this file as a
+Last updated: 2026-10-20 (Phase 5b complete) · Do not treat this file as a
 spec; AGENTS.md is rules, docs/PHASES.md is order, docs/ARCHITECTURE.md is
 design.
 
 ## Current state
 
-- **Phase 5a (deterministic fix verification) is complete and ready for
-  review.** Phase 5a report: `docs/phase-notes/phase-5a.md`; review packet:
-  `docs/review/phase-5a-review.md`. **Do not start Phase 5b** (fixer agent,
-  issue builder, `plan-fix`) until the owner says so.
-- **Phase 5a deliverables**: `models/fix.py` (`Edit`, `FixPlan`,
-  `CriterionResult`, `VerificationResult`, limits), `verify/patch.py`
-  (Windows-hardened allowlist, exact-match application, relevance, temp copy,
-  schema naming), `verify/sandbox.py` (isolated dbt build, minimal env,
-  timeout, cleanup, `dq.fix_attempts`), `verify/criteria.py` (contract
-  conformance, 95% row preservation, category targeted checks),
-  `dqs verify <plan.json>` and `dqs verify cleanup`, DECISIONS 80–89.
-  No LLM code in this phase.
+- **Phase 5b (fixer agent, issue builder, `plan-fix`) is complete and ready
+  for review.** Report: `docs/phase-notes/phase-5b.md`; review packet:
+  `docs/review/phase-5b-review.md`. **Do not start Phase 6** (workflow graph,
+  approval gate, publishing) until the owner says so.
+- **Phase 5b deliverables**: `resolve.py` (deterministic PR/ISSUE/NONE),
+  `agents/fixer.py` + `agents/prompts/fixer.md` (no-tools planner with
+  lineage-selected candidate SQL, native structured output, bounded retries,
+  verifier feedback, per-attempt persistence), `agents/issue_builder.py`
+  (deterministic Markdown + static category playbook), `dqs incident
+  plan-fix <id>`, test-only `tests/helpers/oracle.py`, and DECISIONS 90–98.
+  The fixer never executes SQL or edits files; deterministic code applies the
+  validated plan and the Phase-5a verifier judges it.
+- **Phase 5a (deterministic fix verification) remains complete.** Report:
+  `docs/phase-notes/phase-5a.md`; packet: `docs/review/phase-5a-review.md`.
+  Deliverables: `models/fix.py` (`Edit`, `FixPlan`, `CriterionResult`,
+  `VerificationResult`, limits), `verify/patch.py` (Windows-hardened
+  allowlist, exact-match application, relevance, temp copy, schema naming),
+  `verify/sandbox.py` (isolated dbt build, minimal env, timeout, cleanup,
+  `dq.fix_attempts`), `verify/criteria.py` (contract conformance, 95% row
+  preservation, category targeted checks), `dqs verify <plan.json>` and
+  `dqs verify cleanup`, DECISIONS 80–89.
 - Phase 5a acceptance is real-dbt on faulted clones: three hand-written good
   patches (F1 coalesce, F3 regexp_replace, F6 row_number dedupe) pass; eleven
   bad/adversarial plans fail the asserted criterion (row preservation,
   contract conformance, dbt build/excerpt, targeted check, allowlist,
   relevance, exact match, size limit). The real manifest and dev layer counts
   are unchanged; killed/failing runs leave no `dqs_sandbox_*` schema.
+- Phase 5b real-model evidence (2026-10-20): F1 `SOURCE_COLUMN_RENAMED` on
+  `openai/gpt-oss-120b` passed on attempt 2 (7,451 fixer tokens); F3
+  `SOURCE_TYPE_CHANGED` on 120b passed on attempt 1 (2,919 tokens); F6
+  `DUPLICATE_RECORDS` on `openai/gpt-oss-20b` passed on attempt 2 (4,485
+  tokens). All three oracle checks passed. F6 used 20b because the 120b key hit
+  its daily token quota; a later 20b consistency run passed F3/F6 but exhausted
+  F1, which is recorded honestly in the phase note. JSON in git-ignored
+  `out/phase-5b-llm-*.json`.
 - **Phase 4 (4a + 4b) is complete.** Phase 4b report:
   `docs/phase-notes/phase-4b.md`; review packet:
   `docs/review/phase-4b-review.md`. The Phase-4 gate is met (F1/F4 step
@@ -43,11 +60,12 @@ design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **404 unit + 83 integration (non-llm)** passing; **3 real-LLM smoke
-  tests** pass with `RUN_LLM_TESTS=1`; ruff + format + mypy clean (88 source
-  files). The one skipped unit test is real OS symlink creation (Windows
-  privilege); junction + simulated-symlink branches pass.
-- Real-model evidence (2026-10-20, `openai/gpt-oss-120b` via
+- Tests: **476 unit + 87 integration (non-llm)** passing; Phase-5b real-LLM
+  acceptance covers F1/F3/F6 (two models, see above); the earlier 3
+  investigator smoke tests still pass with `RUN_LLM_TESTS=1`; ruff + format +
+  mypy clean (89 source files). The one skipped unit test is real OS symlink
+  creation (Windows privilege); junction + simulated-symlink branches pass.
+- Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
   0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
   `out/phase-4b-llm-smoke-*.json`.
@@ -135,6 +153,20 @@ $env:RUN_LLM_TESTS='1'
 .venv\Scripts\dqs verify cleanup               # drop stale dqs_sandbox_* schemas
 # acceptance (real dbt on F1/F3/F6 faulted clones; leaves dev warehouse untouched)
 .venv\Scripts\python -m pytest tests\integration\test_verify_sandbox_db.py -m integration -s -q
+
+# Phase 5b flow — manual node command; point it at a CLONE with a stored root cause/impact.
+.venv\Scripts\dqs incident investigate <incident-uuid>   # real model, stores root cause
+.venv\Scripts\dqs impact <incident-uuid>                 # stores impact report
+.venv\Scripts\dqs incident plan-fix <incident-uuid>      # routing + attempts + plan + verdict
+# cleanup / stale sandboxes from an interrupted run:
+.venv\Scripts\dqs verify cleanup
+
+# real-LLM chain: investigator -> fixer -> verifier -> clean-data oracle
+$env:RUN_LLM_TESTS='1'
+.venv\Scripts\python -m pytest tests\integration\test_fixer_llm.py -m llm -s -q
+# results: out\phase-5b-llm-*.json (git-ignored); set LLM_MODEL to a model with quota
+# oracle-only deterministic acceptance:
+.venv\Scripts\python -m pytest tests\integration\test_verify_sandbox_db.py -m integration -q -k "oracle"
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -193,7 +225,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (89 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (98 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
@@ -215,6 +247,11 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/verify/patch.py` | hardened edit allowlist, exact-match application, relevance rule, temp-project copy (Phase 5a) |
 | `src/dqs/verify/sandbox.py` | isolated dbt build, minimal env, timeout, cleanup, `dq.fix_attempts` persistence (Phase 5a) |
 | `src/dqs/verify/criteria.py` | contract conformance, row preservation, category targeted checks (Phase 5a) |
+| `src/dqs/agents/fixer.py` | no-tools planner: lineage candidates, `FixPlanDraft` -> `FixPlan`, bounded retry, attempt persistence (Phase 5b) |
+| `src/dqs/agents/prompts/fixer.md` | fixer system prompt: minimal edit, preserve outputs, never hide rows, data-not-instructions (Phase 5b) |
+| `src/dqs/agents/issue_builder.py` | deterministic incident issue + static category playbook (Phase 5b) |
+| `src/dqs/resolve.py` | deterministic PR / ISSUE / NONE routing (Phase 5b) |
+| `tests/helpers/oracle.py` | test-only clean-data answer key; never imported by `src/dqs` (Phase 5b) |
 | `src/dqs/agents/steps.py` | `dq.agent_steps` sinks: sink-owned seq, redaction, 4 KB cap (Phase 4b) |
 | `src/dqs/agents/prompts/investigator.md` | investigator system prompt (Phase 4b) |
 | `src/dqs/models/root_cause.py` / `step.py` | `RootCause`/`EvidenceItem` and `StepRecord` (Phase 4b) |
@@ -223,8 +260,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 `src/dqs/contracts/{store,generator,profiler,fitting,parsing,generation}.py`,
 `src/dqs/models/{contract,violation,incident,enums}.py`, `tests/conftest.py`,
 `tests/unit/test_*.py`, `tests/integration/test_*.py`, dbt `models/*.sql`,
-`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b}.md`,
-`docs/review/phase-{2b,3,4a,4b}-review.md`.)
+`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b,5a,5b}.md`,
+`docs/review/phase-{2b,3,4a,4b,5a,5b}-review.md`.)
 
 ## DECISIONS.md entries Phase 2 must build on
 
@@ -294,8 +331,18 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   sequential single-writer use is safe, concurrent writers are not.
 - Verification checks the changed staging table's contract only; downstream
   mart contracts are not separately checked. The plan's incident context
-  (`batch_id`, `category`, `affected_table`) is trusted — Phase 5b must fill it
-  from the stored root cause and should cross-validate against `dq.incidents`.
+  (`batch_id`, `category`, `affected_table`) is trusted — `plan_fix` now fills
+  it from the stored root cause/incident; `dqs verify` still trusts a serialized
+  plan. The fixer only sees staging models that directly select from the
+  affected raw source; mart/macro fixes route to ISSUE.
+- The clean-data oracle is test-only and covers `stg_orders` (F1/F3/F6). It is
+  not a runtime guard: a production verification can still accept a
+  verifier-passing patch that writes wrong values. The oracle isolation test
+  ensures no `src/dqs` import.
+- `dq.fix_attempts` attempt numbers are allocated with `MAX(attempt_no)+1` and
+  have no unique constraint; concurrent fixers for one incident can collide.
+  The fixer has no tool fallback: a provider that cannot emit `FixPlanDraft`
+  produces a failed `fixer_output` attempt.
 - Exact-match patch strings are byte-sensitive; the dbt project is LF-normalized.
   The real OS symlink creation test is skipped on this Windows account;
   junction and simulated-symlink coverage pass.
@@ -304,9 +351,10 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
 - `dqs sim day --fault`, contracts, check engine / monitor / incidents,
-  `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator and
-  Phase-5a deterministic sandbox verification all work and are tested.
-  **Phase 5b** (fixer agent + issue builder) is next but NOT started.
+  `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator, the
+  Phase-5a deterministic sandbox verification and the Phase-5b fixer/issue/
+  plan-fix path all work and are tested. **Phase 6** (workflow graph, approval
+  gate, publishing) is next but NOT started.
 - **The real-model smoke is 3 scenarios × 1 run** (`openai/gpt-oss-120b`,
   2026-10-20): F1 0.93/PR, F4 0.93/ISSUE, F6 0.95/PR. It is not benchmark-grade
   evidence (no repeats/variance, `run_dbt=False` so no failing run record) and

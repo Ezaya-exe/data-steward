@@ -524,3 +524,57 @@ entry each; newest last.
     single-command form keeps both required surfaces exact. A failed verdict
     exits 1; a passing attempt is appended to `dq.fix_attempts` with the next
     `attempt_no` for its incident.
+
+## Phase 5b - fixer, issue builder, plan-fix (2026-10-20)
+
+90. **The fixer's structured output is `FixPlanDraft`, not `FixPlan`.** The
+    model returns only the five §10.5 fields (`summary`, `edits`, `rationale`,
+    `expected_effect`, `risk`). Code fills `incident_id`, `batch_id`,
+    `category`, `affected_table` and `affected_columns` from the stored
+    incident and root cause. Making those fields absent from the schema is a
+    structural guarantee that the model cannot relabel the incident or point
+    verification at a different batch.
+91. **Candidate SQL is selected by lineage, never by the model.** The fixer
+    sees only `models/staging/*.sql` files whose manifest `depends_on` includes
+    the source node for the root cause's `raw.<table>`. This is the same
+    relevance rule the verifier enforces, applied before the prompt, so the
+    model cannot be tempted into editing an unrelated file.
+92. **Every planner round trip is persisted through one payload path.** A
+    schema-invalid draft and a draft that fails plan validation are written to
+    `dq.fix_attempts` with a synthetic failed `VerificationResult`; a plan that
+    reaches dbt is written with the real verdict. One sequential attempt number
+    is allocated per incident (`next_attempt_number`) so invalid and valid
+    attempts cannot diverge in the timeline.
+93. **The fixer has no tools and no submit-tool fallback.** Native structured
+    output is the only channel. A provider that cannot emit the schema yields a
+    failed attempt (`fixer_output`), not a tool loop or a hand-written parser.
+    This follows the §10.5 "pre-supplied context" design and AGENTS §7.1.
+94. **`SOURCE_COLUMN_ADDED` routes to NONE before any confidence check.**
+    Warning-level source drift needs no PR or issue action. Every other
+    non-PR-eligible category routes to ISSUE, and a PR additionally requires
+    confidence >= 0.6 and at least one candidate staging model
+    (`dqs.resolve.plan_resolution`).
+95. **`dqs incident plan-fix` reads the stored root cause and impact, prints the
+    deterministic routing, and refuses to plan when routing is not PR.** It is
+    a manual Phase-5b entry point; lifecycle/status changes remain Phase 6. A
+    failed or budget-exhausted run exits 1 after printing every attempt and the
+    final criterion table.
+96. **The issue builder is a template, not an agent.** `build_issue` takes the
+    incident, root cause, impact, the already-decided resolution and any failed
+    attempts. It renders one stable Markdown document with a static
+    per-category playbook (`NEXT_STEPS`), rejects a mismatched impact or a
+    PR/NONE-routed incident (`IssueBuildError`), and collapses multiline
+    model/tool text so hostile content cannot create headings or fake sections.
+97. **The clean-data oracle is test-only.** `tests/helpers/oracle.py` rebuilds
+    the patched staging model with the production patch/build helpers, reads
+    the fault batch from the sandbox, and compares it with
+    `generator.tables_for_date(fault_date, seed)`. It is never imported by
+    `src/dqs` (asserted by a test). A verifier pass with an oracle mismatch is
+    a test failure and is recorded in the LLM result JSON, not hidden.
+98. **The real-LLM fixer test runs the whole chain and records, not tunes.**
+    Each F1/F3/F6 scenario seeds a throwaway template, clones it, runs the real
+    investigator, stores the root cause, builds impact, then runs the fixer and
+    verifier. Results (attempts, failed criteria, tokens, retries, oracle
+    verdict) are written to `out/phase-5b-llm-*.json`. A provider quota error
+    is recorded as a failed attempt; reruns after quota recovery use the same
+    scenario and do not change prompts or expected outcomes.
