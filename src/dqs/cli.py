@@ -8,6 +8,7 @@ added phase by phase — commands are not invented here):
   owner-requested; see docs/DECISIONS.md)
 - `dqs sim seed [--days N] [--seed S] | day --date YYYY-MM-DD [--no-dbt]`  (Phase 1)
 - `dqs dbt build [--target dev|sandbox]`                                    (Phase 1)
+- `dqs verify <plan.json> | cleanup`                                        (Phase 5a)
 
 Errors from the layer below are caught and printed; the process exit code is
 non-zero so scripts/CI can rely on it.
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 from sqlalchemy import Engine
@@ -44,10 +46,12 @@ from dqs.lineage.graph import LineageGraph
 from dqs.lineage.impact import build_impact_report
 from dqs.models.contract import Contract
 from dqs.models.faults import FaultSpec
+from dqs.models.fix import FixPlan
 from dqs.models.violation import Violation
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
 from dqs.tools.base import ToolContext
+from dqs.verify.sandbox import cleanup_stale_sandboxes, verify_fix
 
 app = typer.Typer(name="dqs", help="Agentic data-quality steward for batch pipelines.")
 db_app = typer.Typer(help="Warehouse bootstrap commands (roles, schemas, dq tables).")
@@ -559,6 +563,78 @@ def impact(
         exposures.add_row(exposure.name, exposure.owner or "-", exposure.maturity)
     console.print(exposures)
     console.print(f"[bold]blast radius score: {report.blast_radius_score}[/bold]")
+
+
+@app.command("verify")
+def verify(
+    target: Annotated[str, typer.Argument(help="A fix-plan JSON path, or the word 'cleanup'.")],
+) -> None:
+    """Verify a fix plan in a sandbox, or drop stale sandbox schemas.
+
+    `dqs verify <plan.json>` runs the §11 checks; `dqs verify cleanup` drops
+    leftover `dqs_sandbox_*` schemas from an interrupted run.
+    """
+    if target.lower() == "cleanup":
+        _verify_cleanup()
+        return
+    plan = Path(target)
+    try:
+        raw = plan.read_text(encoding="utf-8")
+        loaded = FixPlan.model_validate_json(raw)
+    except OSError as exc:
+        raise typer.BadParameter(f"cannot read plan {plan}: {exc}") from exc
+    except ValidationError as exc:
+        raise typer.BadParameter(f"invalid fix plan {plan}:\n{exc}") from exc
+
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        result = verify_fix(settings, loaded, engine=engine)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+
+    table = Table(show_header=True, header_style="bold")
+    for column in ("criterion", "verdict", "detail"):
+        table.add_column(column)
+    for criterion in result.criteria:
+        table.add_row(
+            criterion.name,
+            "PASS" if criterion.passed else "FAIL",
+            criterion.detail[:140],
+        )
+    console.print(table)
+    if result.row_counts:
+        counts = " ".join(f"{key}={value}" for key, value in sorted(result.row_counts.items()))
+        console.print(f"rows: {counts}")
+    console.print(
+        f"sandbox={result.sandbox_schema} dbt_exit={result.dbt_exit_code} "
+        f"duration={result.duration_s:.1f}s tables={result.contract_tables}"
+    )
+    if result.dbt_log_excerpt and not result.passed:
+        console.print("[bold]dbt excerpt[/bold]")
+        console.print(result.dbt_log_excerpt)
+    if result.passed:
+        console.print("[green]PASS[/green] fix verified; attempt persisted in dq.fix_attempts")
+    else:
+        console.print(f"[red]FAIL[/red] failed criteria: {', '.join(result.failed_criteria)}")
+        raise typer.Exit(1)
+
+
+def _verify_cleanup() -> None:
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        dropped = cleanup_stale_sandboxes(engine)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    if dropped:
+        console.print(f"[green]ok[/green] dropped {len(dropped)} schema(s): {', '.join(dropped)}")
+    else:
+        console.print("[green]ok[/green] no sandbox schemas remained")
 
 
 def _check_engine(engine: Engine) -> CheckEngine:

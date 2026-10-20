@@ -137,15 +137,20 @@ def dbt_command(
     target_path: Path,
     log_path: Path,
 ) -> list[str]:
-    """`dbt build` command with isolated paths and selector `@model`.
+    """`dbt build` command with isolated target/log paths.
 
-    `@model` selects the model, its descendants, and the ancestors those
-    descendants need. Plain `<model>+` would skip sibling staging models that
-    downstream marts reference, making the build fail for an unrelated reason.
+    The selector is `staging.*+` rather than `<changed>+`; see the comment
+    below for why the narrower selector is not self-contained.
     """
     selectors: list[str] = []
-    for model in models:
-        selectors.append(f"@{model}")
+    if models:
+        # `staging.*+` is a deliberate superset of `<changed>+`: downstream
+        # marts reference *sibling* staging models, and relationship tests live
+        # on those siblings. Selecting only the changed branch leaves those
+        # relations missing in the sandbox, which would fail the build for a
+        # reason unrelated to the fix. Building all staging models + their
+        # tests + downstream marts keeps the sandbox self-contained.
+        selectors.append("staging.*+")
     cmd = [
         str(dbt_executable()),
         "build",
@@ -404,11 +409,14 @@ def verify_fix(
     outcome = BuildOutcome(exit_code=None, timed_out=False, output="", run_results_present=False)
     models: list[str] = []
     contracts: dict[str, Contract] = {}
+    cleaned = False
 
     def finish() -> VerificationResult:
+        nonlocal cleaned
         # Cleanup is part of the verdict: an undropped schema is a failed run.
         try:
             drop_sandbox_schemas(resolved_engine, base_schema)
+            cleaned = True
             criteria.append(CriterionResult(name="sandbox_cleanup", passed=True))
         except SandboxError as exc:
             criteria.append(CriterionResult(name="sandbox_cleanup", passed=False, detail=str(exc)))
@@ -493,5 +501,9 @@ def verify_fix(
                 )
         return finish()
     finally:
+        # Belt and braces for an unexpected exception: never leave a schema
+        # behind, even if the normal `finish()` path was skipped.
+        if not cleaned:
+            drop_sandbox_schemas(resolved_engine, base_schema, raise_on_error=False)
         if owned_engine:
             resolved_engine.dispose()

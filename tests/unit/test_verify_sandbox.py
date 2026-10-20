@@ -69,7 +69,7 @@ def test_dbt_command_isolates_target_and_log_paths(tmp_path: Path) -> None:
     assert cmd[cmd.index("--target-path") + 1] == str(tmp_path / "target")
     assert cmd[cmd.index("--log-path") + 1] == str(tmp_path / "logs")
     select_at = cmd.index("--select")
-    assert cmd[select_at + 1 :] == ["@stg_orders", "@stg_payments"]
+    assert cmd[select_at + 1 :] == ["staging.*+"]
     assert "--fail-fast" in cmd
     assert "--no-use-colors" in cmd
 
