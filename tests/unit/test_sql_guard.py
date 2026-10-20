@@ -49,6 +49,16 @@ INVALID_SQL = [
     "SELECT set_config('statement_timeout', '0', false)",
     "SELECT current_setting('data_directory')",
     "SELECT query_to_xml('SELECT * FROM raw.orders', true, true, '')",
+    "SELECT table_to_xml('raw.orders', true, true, '')",
+    "SELECT ts_stat('SELECT to_tsvector(''english'', ''x'')')",
+    "SELECT pg_advisory_lock(1)",
+    "SELECT pg_read_binary_file('/etc/passwd')",
+    # the allowlist is by canonical name: qualification/quoting must not bypass it
+    "SELECT pg_catalog.pg_sleep(1)",
+    'SELECT "pg_sleep"(1)',
+    "SELECT pg_catalog.current_setting('data_directory')",
+    # not on the allowlist even though harmless — deny-by-default
+    "SELECT version()",
     # SQL embedded in a CTE (not just the top-level statement)
     "WITH x AS (DELETE FROM raw.orders RETURNING *) SELECT * FROM x",
     "WITH x AS (INSERT INTO raw.orders (order_id) VALUES ('1') RETURNING *) SELECT * FROM x",
@@ -66,6 +76,18 @@ VALID_SQL = [
     "WITH x AS (SELECT * FROM raw.orders) SELECT * FROM x",
     "SELECT * FROM raw.orders JOIN staging.stg_orders USING (order_id)",
     "SELECT * FROM raw.orders WHERE order_id IN (SELECT order_id FROM raw.order_items)",
+    # allowlisted aggregates / string / date / math / conditional helpers
+    "SELECT count(*), sum(total_amount), avg(total_amount) FROM raw.orders",
+    "SELECT status, count(*) FROM raw.orders GROUP BY status",
+    "SELECT lower(status), upper(status), length(status) FROM raw.orders",
+    "SELECT coalesce(status, 'unknown'), nullif(status, '') FROM raw.orders",
+    "SELECT round(total_amount, 2), abs(total_amount) FROM raw.orders",
+    "SELECT cast(total_amount as numeric), total_amount::numeric FROM raw.orders",
+    "SELECT date_trunc('day', order_ts) FROM raw.orders",
+    "SELECT extract(year from order_ts) FROM raw.orders",
+    "SELECT substring(status from 1 for 3) FROM raw.orders",
+    "SELECT CASE WHEN status = 'paid' THEN 1 ELSE 0 END FROM raw.orders",
+    "SELECT count(*) FILTER (WHERE status = 'paid') FROM raw.orders",
 ]
 
 
@@ -101,3 +123,17 @@ def test_guard_caps_limit_all() -> None:
 def test_guard_rejects_empty_sql() -> None:
     with pytest.raises(SqlGuardError, match="empty"):
         validate_sql("   ")
+
+
+@pytest.mark.parametrize(
+    ("sql", "function"),
+    [
+        ("SELECT query_to_xml('SELECT 1', true, true, '')", "query_to_xml"),
+        ("SELECT table_to_xml('raw.orders', true, true, '')", "table_to_xml"),
+        ("SELECT pg_read_binary_file('/etc/passwd')", "pg_read_binary_file"),
+        ("SELECT version()", "version"),
+    ],
+)
+def test_guard_names_the_rejected_function(sql: str, function: str) -> None:
+    with pytest.raises(SqlGuardError, match=function):
+        validate_sql(sql)

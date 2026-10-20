@@ -5,8 +5,10 @@ model. The model is untrusted output, so the guard is a positive allowlist, not
 a blocklist: exactly one statement, parsed by sqlglot (postgres dialect), a
 top-level SELECT/WITH-SELECT, no DML/DDL anywhere (including inside a CTE), no
 `SELECT ... INTO`, no locking clauses, only the four steward schemas, no
-table-format abuse, and no dangerous admin/file/dblink functions. The LIMIT is
-capped at 200 regardless of what the model asked for.
+table-format abuse, and a **function allowlist** (aggregates, basic
+string/date/math helpers, `coalesce`, `nullif`, `round`, casts). Any other
+function is rejected and named in the error. The LIMIT is capped at 200
+regardless of what the model asked for.
 
 Execution is defence in depth: the same statement runs on the `dqs_ro` engine
 inside `SET TRANSACTION READ ONLY` with `statement_timeout` ≤ 5 s. Even if the
@@ -62,20 +64,140 @@ _FORBIDDEN_NODES: Final = tuple(
     )
     if node is not None
 )
-_DANGEROUS_EXACT: Final = frozenset(
+# A positive allowlist (not a denylist): the model may only call functions
+# whose purpose is inspection/transformation. Names are sqlglot's canonical
+# lower-case function names (`Cast` -> "cast", `TimestampTrunc` ->
+# "timestamp_trunc"), so the same rule covers typed nodes and `Anonymous`
+# functions. Anything else is rejected and named. Being too strict is
+# deliberate: false rejections are acceptable, an unexpected function is not.
+ALLOWED_FUNCTIONS: Final[frozenset[str]] = frozenset(
     {
-        "set_config",
-        "current_setting",
-        "query_to_xml",
-        "database_to_xml",
-        "has_database_privilege",
-        "has_schema_privilege",
-        "has_table_privilege",
-        "loread",
-        "lowrite",
+        # aggregates
+        "array_agg",
+        "avg",
+        "bool_and",
+        "bool_or",
+        "count",
+        "every",
+        "group_concat",
+        "logical_and",
+        "logical_or",
+        "max",
+        "min",
+        "mode",
+        "percentile_cont",
+        "percentile_disc",
+        "stddev",
+        "stddev_pop",
+        "stddev_samp",
+        "string_agg",
+        "sum",
+        "var_pop",
+        "var_samp",
+        "variance",
+        "variance_pop",
+        "variance_samp",
+        # string helpers
+        "ascii",
+        "btrim",
+        "char_length",
+        "character_length",
+        "chr",
+        "concat",
+        "concat_ws",
+        "format",
+        "initcap",
+        "lpad",
+        "ltrim",
+        "left",
+        "length",
+        "lower",
+        "md5",
+        "octet_length",
+        "pad",
+        "position",
+        "regexp_match",
+        "regexp_matches",
+        "regexp_replace",
+        "regexp_split_to_array",
+        "repeat",
+        "replace",
+        "reverse",
+        "right",
+        "rpad",
+        "rtrim",
+        "split_part",
+        "starts_with",
+        "str_position",
+        "strpos",
+        "substr",
+        "substring",
+        "time_to_str",
+        "to_char",
+        "translate",
+        "trim",
+        "upper",
+        # date/time helpers
+        "age",
+        "current_date",
+        "current_time",
+        "current_timestamp",
+        "date_part",
+        "date_trunc",
+        "extract",
+        "justify_days",
+        "justify_hours",
+        "justify_interval",
+        "localtime",
+        "localtimestamp",
+        "make_date",
+        "make_timestamp",
+        "now",
+        "str_to_date",
+        "str_to_time",
+        "timestamp_from_parts",
+        "timestamp_trunc",
+        "to_date",
+        "to_timestamp",
+        "timezone",
+        # math helpers
+        "abs",
+        "ceil",
+        "ceiling",
+        "div",
+        "exp",
+        "floor",
+        "greatest",
+        "least",
+        "ln",
+        "log",
+        "log10",
+        "mod",
+        "pi",
+        "pow",
+        "power",
+        "round",
+        "sign",
+        "sqrt",
+        "trunc",
+        "width_bucket",
+        # conditional / type helpers
+        "case",
+        "cast",
+        "coalesce",
+        "if",
+        "ifnull",
+        "nullif",
+        "nvl",
+        "safe_cast",
+        "try_cast",
+        # harmless session identity helpers
+        "current_catalog",
+        "current_schema",
+        "current_user",
+        "session_user",
     }
 )
-_DANGEROUS_PREFIXES: Final = ("pg_", "lo_", "dblink")
 
 
 class QueryResult(BaseModel):
@@ -192,15 +314,28 @@ def _check_relations(statement: exp.Expression) -> None:
             )
 
 
+def _function_name(function: exp.Func) -> str:
+    """Canonical lower-case name for a sqlglot function node.
+
+    `Anonymous` keeps the written name (`query_to_xml`); typed nodes expose a
+    SQL name (`Cast` -> "CAST", `TimestampTrunc` -> "TIMESTAMP_TRUNC"). Using
+    the canonical name means a quoted or schema-qualified `pg_sleep` cannot
+    dodge the check under a different node type.
+    """
+    if isinstance(function, exp.Anonymous):
+        return str(function.name or "").strip().lower()
+    return str(function.sql_name() or "").strip().lower()
+
+
 def _check_functions(statement: exp.Expression) -> None:
-    for function in (*statement.find_all(exp.Anonymous), *statement.find_all(exp.Func)):
-        name = str(getattr(function, "name", "") or "").lower()
-        if not name:
-            continue
-        if name in _DANGEROUS_EXACT or name.startswith(_DANGEROUS_PREFIXES):
+    for function in statement.find_all(exp.Func):
+        name = _function_name(function)
+        if name not in ALLOWED_FUNCTIONS:
+            shown = name or function.sql(dialect=DIALECT)
             raise SqlGuardError(
-                f"function {name!r} is not allowed in read-only agent SQL "
-                "(file, admin, session and dblink functions are denied)"
+                f"function {shown!r} is not allowed in read-only agent SQL; "
+                "only aggregates, basic string/date/math helpers, coalesce, "
+                "nullif, round and casts are permitted"
             )
 
 
