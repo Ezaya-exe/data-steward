@@ -187,7 +187,7 @@ _FAILED_NODES_SQL: Final = (
 )
 
 
-def _row_to_record(row: Row[Any]) -> PipelineRunRecord | None:
+def _row_to_record(row: Row[Any], *, require_nodes: bool = True) -> PipelineRunRecord | None:
     vals = tuple(row)
     raw_nodes = vals[8]
     nodes: list[NodeResult] = []
@@ -199,7 +199,7 @@ def _row_to_record(row: Row[Any]) -> PipelineRunRecord | None:
                 # One malformed entry must not erase the rest (guardrail §7.8:
                 # records are data; log and continue).
                 logger.warning("skipping malformed failed_nodes entry: %s", exc)
-    if not nodes:
+    if require_nodes and not nodes:
         return None
     return PipelineRunRecord(
         run_id=vals[0],
@@ -212,6 +212,30 @@ def _row_to_record(row: Row[Any]) -> PipelineRunRecord | None:
         run_results_parsed_at=vals[7],
         failed_nodes=nodes,
     )
+
+
+_RUN_COLUMNS_SQL: Final = (
+    "SELECT run_id, batch_id, command, status, started_at, finished_at, log_excerpt, "
+    "run_results_parsed_at, failed_nodes FROM dq.pipeline_runs"
+)
+
+
+def latest_run(engine: Engine, batch_id: str | None = None) -> PipelineRunRecord | None:
+    """Newest run for `batch_id` (or overall), success or failure.
+
+    Unlike `latest_run_for_batch` this does not require parsed failures: the
+    investigator's `get_pipeline_run` tool needs the status and log excerpt for
+    successful builds too.
+    """
+    sql = _RUN_COLUMNS_SQL
+    params: dict[str, object] = {}
+    if batch_id is not None:
+        sql += " WHERE batch_id = :b"
+        params["b"] = batch_id
+    sql += " ORDER BY run_id DESC LIMIT 1"
+    with engine.connect() as conn:
+        row = conn.execute(text(sql), params).fetchone()
+    return None if row is None else _row_to_record(row, require_nodes=False)
 
 
 def latest_run_for_batch(engine: Engine, batch_id: str | None = None) -> PipelineRunRecord | None:
