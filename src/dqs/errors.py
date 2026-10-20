@@ -35,3 +35,23 @@ class DatabaseError(DqsError):
 
 class LineageError(DqsError):
     """(dbt) lineage cannot be read/built: missing manifest, unknown node, bad SQL."""
+
+
+class LLMError(DqsError):
+    """The LLM provider is unavailable, misconfigured, or returned unusable output."""
+
+
+class BudgetExceeded(DqsError):
+    """An incident investigation exceeded a hard budget (calls, tokens, or time)."""
+
+
+class SqlGuardError(DqsError):
+    """A SQL string was rejected by the read-only guard (AGENTS.md §7.2)."""
+
+
+class SqlExecutionError(DqsError):
+    """A guarded SQL statement failed while running on the read-only role."""
+
+
+class ToolError(DqsError):
+    """An agent tool could not answer (bad input, missing row, unsafe identifier)."""

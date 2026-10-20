@@ -30,6 +30,7 @@ from dqs import dbt_run
 from dqs import dev as devmod
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
+from dqs.agents.smoke import run_smoke
 from dqs.checks.engine import CheckEngine
 from dqs.config import load_settings
 from dqs.contracts import generation as contracts_generation
@@ -52,6 +53,7 @@ contracts_app = typer.Typer(help="Data contract generation and approval (§7).")
 check_app = typer.Typer(help="Run the deterministic check engine by hand (§7.3).")
 monitor_app = typer.Typer(help="The batch monitor: run checks and record incidents (§8).")
 incidents_app = typer.Typer(help="Inspect recorded incidents.")
+llm_app = typer.Typer(help="LLM provider checks (Phase 4).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
@@ -60,6 +62,7 @@ app.add_typer(contracts_app, name="contracts")
 app.add_typer(check_app, name="check")
 app.add_typer(monitor_app, name="monitor")
 app.add_typer(incidents_app, name="incidents")
+app.add_typer(llm_app, name="llm")
 
 console = Console()
 
@@ -387,6 +390,39 @@ def incidents_show(
         f"  created {incident.created_at.isoformat()}  updated {incident.updated_at.isoformat()}"
     )
     _print_violations(incident.violations)
+
+
+@llm_app.command("smoke")
+def llm_smoke(
+    provider: str | None = typer.Option(None, help="Provider override (default: LLM_PROVIDER)."),
+    model: str | None = typer.Option(None, help="Model override (default: LLM_MODEL)."),
+) -> None:
+    """Run four provider probes: completion, tool call, structured output, 3-step loop."""
+    settings = load_settings()
+    chosen_provider = provider or settings.llm_provider
+    chosen_model = model or settings.llm_model
+    try:
+        report = run_smoke(chosen_provider, chosen_model, settings=settings)
+    except DqsError as exc:
+        _fail(exc)
+    console.print(f"llm smoke provider={report.provider} model={report.model}")
+    table = Table(show_header=True, header_style="bold")
+    for column in ("probe", "result", "latency_ms", "tokens_in", "tokens_out", "detail"):
+        table.add_column(column)
+    for result in report.results:
+        table.add_row(
+            result.name,
+            "PASS" if result.passed else "FAIL",
+            str(result.latency_ms),
+            str(result.input_tokens),
+            str(result.output_tokens),
+            result.detail,
+        )
+    console.print(table)
+    if not report.passed:
+        console.print("[red]one or more probes failed[/red]")
+        raise typer.Exit(1)
+    console.print("[green]ok[/green] all four probes passed")
 
 
 @app.command("impact")

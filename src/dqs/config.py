@@ -17,7 +17,9 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
-LLM_PROVIDERS = frozenset({"anthropic", "openai", "google_genai", "ollama", "fake"})
+LLM_PROVIDERS = frozenset(
+    {"anthropic", "openai", "google_genai", "ollama", "openai_compatible", "fake"}
+)
 GITHUB_MODES = frozenset({"dry_run", "live"})
 
 
@@ -52,6 +54,11 @@ class Settings(BaseSettings):
     llm_model_bench: str = "claude-sonnet-5-5"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    # OpenAI-compatible endpoints (DeepSeek, Kimi, GLM, OpenRouter, local Ollama).
+    # Only `openai_compatible`/`ollama` read these; the field names match the
+    # documented env variables exactly (no aliases needed).
+    llm_base_url: str = ""
+    llm_api_key: str = ""
 
     # GitHub publishing (Phase 6). dry_run writes PR previews to out/ only.
     github_mode: str = "dry_run"
