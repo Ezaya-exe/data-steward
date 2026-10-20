@@ -61,7 +61,7 @@ and drops every clone/sandbox afterwards.
 | 3 | Good hand-written F6 (`row_number()` dedupe by PK, latest `_loaded_at`) passes | PASS | same 3-test run; distinct-PK row denominator and unique-PK targeted check both pass |
 | 4 | `where false` / row deletion → row preservation | PASS | `test_bad_patch_that_deletes_rows_fails_row_preservation`; failure detail `0 staging rows ... minimum is 95%` |
 | 5 | Renamed output column → contract conformance | PASS | `test_bad_patch_that_renames_an_output_column_fails_contract_conformance`; detail names missing `customer_id` and unexpected `customer_key`; the contract criterion is asserted |
-| 6 | SQL syntax error → dbt failure with excerpt | PASS | `test_bad_patch_with_a_syntax_error_fails_dbt_build_with_an_excerpt`; non-zero `dbt_exit_code` and `dbt_log_excerpt` contains the compiler error |
+| 6 | SQL syntax error → dbt failure with excerpt | PASS | `test_bad_patch_with_a_syntax_error_fails_dbt_build_with_an_excerpt`; non-zero `dbt_exit_code` and `dbt_log_excerpt` contains the compiler error; because no staging table exists, contract/row/targeted are also explicitly failed as unproven |
 | 7 | Plain filter hiding bad rows → row preservation or targeted check | PASS | `test_bad_filter_that_hides_bad_rows_fails_the_targeted_check`; the faulted batch has no staging rows, so `targeted_check` fails (the test asserts the targeted reason, not row preservation) |
 | 8 | `schema.yml`, `../..`, outside `models/` → allowlist | PASS | `test_bad_paths_relevance_and_exact_match_are_rejected_before_dbt` (parameterized: `schema.yml`, `models/../macros/x.sql`, `macros/x.sql`) plus unit cases for absolute/UNC/drive/NUL/ADS/reserved names |
 | 9 | Unrelated model → relevance rule | PASS | same parameterized test with `stg_products` vs `raw.orders`; detail says the model does not directly select from the affected table |
@@ -74,14 +74,14 @@ and drops every clone/sandbox afterwards.
 | 16 | No secrets in the dbt child env | PASS | `test_child_env_is_minimal_and_has_no_api_tokens`; polluted source with `LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GITHUB_TOKEN` yields none of those values, `PGDATABASE` comes from `Settings` |
 | 17 | `dq.fix_attempts` persistence | PASS | good-case test reads `(attempt_no, passed) == (1, True)` for its incident |
 | 18 | CLI `verify` and `verify cleanup` | PASS | `test_cli_verify_and_cleanup` invokes both through `CliRunner`; cleanup drops a seeded stale schema |
-| 19 | Lint / mypy / tests | PASS | `ruff check .` all checks passed; `ruff format --check` clean (146 files); `mypy src\dqs` success on **88 files**; **404 unit passed, 1 skipped**; **83 integration passed, 3 skipped** (LLM-only), 349.44s |
+| 19 | Lint / mypy / tests | PASS | `ruff check .` all checks passed; `ruff format --check` clean (146 files); `mypy src\dqs` success on **88 files**; **404 unit passed, 1 skipped**; **83 integration passed, 3 skipped** (LLM-only), 340.81s |
 | 20 | Dev warehouse unchanged | PASS | `dq.batches=30`, `dq.incidents=0`, `dq.agent_steps=0`, `dq.fix_attempts=0`, no `dqs_sandbox_*` schemas, no stray `dqs_%` databases |
 
 Real command output summary:
 
 ```
 tests/unit:        404 passed, 1 skipped, 86 deselected in 2.12s
-tests/integration:  83 passed, 3 skipped, 405 deselected in 349.44s
+tests/integration:  83 passed, 3 skipped, 405 deselected in 340.81s
 good-patch subset:   3 passed in 31.67s
 bad/edge subset:    15 passed in 46.42s
 ```
