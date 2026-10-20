@@ -303,6 +303,11 @@ def test_bad_patch_with_a_syntax_error_fails_dbt_build_with_an_excerpt(
     result = sandbox.verify_fix(clone_settings, plan, engine=engine)
     assert result.passed is False
     assert "dbt_build" in result.failed_criteria
+    assert {
+        "contract_conformance",
+        "row_preservation",
+        "targeted_check",
+    } <= set(result.failed_criteria)
     assert result.dbt_exit_code not in (None, 0)
     assert result.dbt_log_excerpt
     assert "Error" in result.dbt_log_excerpt or "error" in result.dbt_log_excerpt

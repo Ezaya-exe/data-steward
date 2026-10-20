@@ -489,15 +489,18 @@ def verify_fix(
                 criteria.extend(
                     criteria_module.evaluate(resolved_engine, plan, base_schema, models, contracts)
                 )
-            elif not outcome.passed:
-                # No model output exists (e.g. a syntax error): dbt_build is the
-                # honest failure, not a pile of "relation does not exist" noise.
-                criteria.append(
-                    CriterionResult(
-                        name="targeted_check",
-                        passed=False,
-                        detail="no staging table was produced by the failed build",
-                    )
+            else:
+                # No model output exists. This can be a syntax/compile failure
+                # or (worse) a build that claimed success without creating the
+                # table. Every mandatory criterion is therefore unproven and
+                # must fail; otherwise a missing table could yield a PASS.
+                reason = "no staging table was produced by the build"
+                criteria.extend(
+                    [
+                        CriterionResult(name="contract_conformance", passed=False, detail=reason),
+                        CriterionResult(name="row_preservation", passed=False, detail=reason),
+                        CriterionResult(name="targeted_check", passed=False, detail=reason),
+                    ]
                 )
         return finish()
     finally:
