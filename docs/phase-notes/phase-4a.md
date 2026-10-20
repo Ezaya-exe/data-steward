@@ -80,7 +80,7 @@ deferred (table below).
 
 | # | Criterion (in scope for 4a) | Verdict | Evidence |
 |---|---|---|---|
-| 1 | `get_llm` supports the documented providers; `openai_compatible` requires `LLM_BASE_URL`; unknown provider rejected; keys never logged | PASS | `test_llm.py` (12 tests): fake deterministic, missing base URL → `ConfigError`, `excel` rejected, redaction removes `sk-ant-…`/`api_key=…`. Fake smoke runs end-to-end without a key |
+| 1 | `get_llm` supports the documented providers; `openai_compatible` requires `LLM_BASE_URL`; unknown provider rejected; keys never logged | PASS | `test_llm.py` (19 tests): fake deterministic, missing base URL → `ConfigError`, `excel` rejected, redaction removes `sk-ant-…`/`api_key=…`, and a stubbed `init_chat_model` proves every provider receives `api_key` from Settings (even when the process env differs). Fake smoke runs end-to-end without a key |
 | 2 | Per-call latency and token capture (including structured output and failures) | PASS | `test_client_records_latency_and_tokens`; structured probe reports tokens (raw message measured, not the `{"raw",…}` wrapper); failed calls are recorded with a redacted error |
 | 3 | Budget tracker enforces tool calls, tokens and wall clock deterministically | PASS | `test_budget_tool_call_limit`, `test_budget_token_limit`, `test_budget_wall_clock_timeout`, `test_budget_state_reports_remaining`; injected `_Clock`. `test_fake_provider_calls_are_counted_by_the_budget` proves `LLMClient` + fake model feeds the tracker (17 tokens); `test_client_raises_when_a_call_exceeds_the_token_budget` proves the raise while the call stays measured |
 | 4 | `dqs llm smoke` = 4 probes, prints pass/fail + latency + tokens, non-zero exit on failure | PASS | CLI run below: all four PASS on `fake`; loop probe shows `model_calls=3`. Failure path: `dqs llm smoke --provider excel` reports four FAIL rows and exits **1** |
@@ -89,7 +89,7 @@ deferred (table below).
 | 7 | DB-level proof that `dqs_ro` blocks writes independently and timeout is real | PASS | `test_sql_guard_db.py`: 6 passed. DELETE/UPDATE/INSERT/`CREATE TABLE` on `dqs_ro` all raise "permission denied"/"read-only" (`WHERE false` + rollback); recursive CTE with `timeout_ms=200` raises `SqlExecutionError` |
 | 8 | Tool tests on fixtures: profile stats correct; F1 rename ranks `cust_id` first | PASS | `test_summarize_batch_profile_on_known_frame_stats`, `test_find_rename_candidates_ranks_cust_id_first_for_f1_case`, `test_rename_does_not_invent_type_match_for_empty_column` |
 | 9 | Hostile sample text flows through as data, never instructions | PASS (boundary only) | `test_data_tool_wraps_hostile_text_as_data`: `IGNORE PREVIOUS INSTRUCTIONS…` is inside a `<data>` JSON string; guard rejects any write it might suggest. The loop-level "no DB change" test requires the investigator (4b) |
-| 10 | Lint, format, mypy and all tests green; dev warehouse untouched | PASS | `ruff check .` → all passed; `ruff format --check .` → 128 files already formatted; mypy → 85 source files clean; **288 unit + 58 integration passed** (integration 330 s). After the suite: 30 batches, 0 incidents, 13,891 `raw.orders`, max date 2026-01-30 |
+| 10 | Lint, format, mypy and all tests green; dev warehouse untouched | PASS | `ruff check .` → all passed; `ruff format --check .` → 128 files already formatted; mypy → 85 source files clean; **295 unit + 58 integration passed** (integration 330 s). After the suite: 30 batches, 0 incidents, 13,891 `raw.orders`, max date 2026-01-30 |
 | 11 | Real-provider LLM smoke on F1/F4/F6 with schema-valid `RootCause` | **DEFERRED to 4b** | No API key is present in this environment (`anthropic_api_key`, `openai_api_key`, `llm_api_key` all empty), and `RootCause` does not exist yet. Fake smoke only proves wiring, not model quality (AGENTS §7.9) |
 | 12 | Budget test with a fake LLM that never stops calling tools terminates at `MAX_TOOL_CALLS` with `UNKNOWN`/escalation | **DEFERRED to 4b** | `BudgetTracker` raises `BudgetExceeded` at the boundary (tested); the loop that catches it and returns an escalation result is the investigator |
 
@@ -178,17 +178,19 @@ Logged in `docs/DECISIONS.md` (62–68). Highlights:
   model, or `dqs incident investigate` command exists yet.
 * `ollama` is supported through its OpenAI-compatible endpoint instead of a
   dedicated integration package (DECISIONS 62).
-* `google_genai` is exposed but its integration package is not installed;
-  the error path is wrapped with install guidance (DECISIONS 62).
+* `google_genai` is wired through `langchain-google-genai` (installed 4.4.2);
+  every provider now receives `api_key` explicitly from `Settings` — no
+  provider client reads the process environment (DECISIONS 69).
 * `latest_run` was added to `dbt_run.py` (not in the Phase-4 task list) because
   `get_pipeline_run` must be able to report successful runs (DECISIONS 68).
 * Rename weights were not specified by the docs; logged as DECISIONS 64.
 
 ## Known limitations / TODO
 
-* **No real-model run yet.** No API key is available, so the only executed
-  smoke is `fake`. The Phase-4 LLM acceptance (F1/F4/F6 → valid `RootCause`)
-  remains open for 4b.
+* **No real-model run was executed for this phase note.** The only executed
+  smoke is `fake`; run `dqs llm smoke` with the configured provider before
+  trusting model behavior. The Phase-4 LLM acceptance (F1/F4/F6 → valid
+  `RootCause`) remains open for 4b.
 * **No investigator loop yet**, therefore no step timeline, no
   `dq.agent_steps` writes, no `UNKNOWN`/escalation path, and no loop-level
   prompt-injection "no DB change" assertion. The pieces (`BudgetTracker`,

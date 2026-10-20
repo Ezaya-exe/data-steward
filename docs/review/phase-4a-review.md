@@ -24,7 +24,7 @@ Companion: `docs/phase-notes/phase-4a.md`.
 | 5 | Tool outputs truncated and wrapped as data; prompt text stays data | PASS | 4 KB envelope tests + hostile-string test; all nine real-warehouse outputs started with `<data>` |
 | 6 | Budget test with an endless fake tool loop terminates at `MAX_TOOL_CALLS` → `UNKNOWN`/escalation | DEFERRED (4b) | Tracker raises `BudgetExceeded` at the boundary (tested); no loop exists yet |
 | 7 | LLM smoke on F1/F4/F6 produces schema-valid `RootCause` with category/confidence | DEFERRED (4b) | No API key present; `RootCause` is part of 4b |
-| 8 | Lint/format/mypy/tests green; dev warehouse untouched | PASS | ruff + format + mypy clean; 288 unit + 58 integration passed; 30 batches, 0 incidents, 13,891 orders after the run |
+| 8 | Lint/format/mypy/tests green; dev warehouse untouched | PASS | ruff + format + mypy clean; 295 unit + 58 integration passed; 30 batches, 0 incidents, 13,891 orders after the run |
 
 ## Verification commands (all run for this packet)
 
@@ -37,7 +37,7 @@ Companion: `docs/phase-notes/phase-4a.md`.
 $env:LLM_PROVIDER='fake'; .venv\Scripts\dqs llm smoke
 ```
 
-Results: clean, clean, clean, 288 passed, 58 passed (330 s), all four probes
+Results: clean, clean, clean, 295 passed, 58 passed (330 s), all four probes
 PASS.
 
 ## Three weakest points

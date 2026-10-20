@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     llm_model_bench: str = "claude-sonnet-5-5"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    google_api_key: str = ""
     # OpenAI-compatible endpoints (DeepSeek, Kimi, GLM, OpenRouter, local Ollama).
     # Only `openai_compatible`/`ollama` read these; the field names match the
     # documented env variables exactly (no aliases needed).

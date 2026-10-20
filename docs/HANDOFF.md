@@ -19,7 +19,10 @@ design.
   `lineage_tool`, `registry`), `dbt_run.latest_run`, DECISIONS 62–68.
   Tests: `test_llm.py`, `test_sql_guard.py`, `test_tools.py`,
   `test_sql_guard_db.py`.
-- Tests: **288 unit + 58 integration** passing; ruff + format + mypy clean.
+- Tests: **295 unit + 58 integration** passing; ruff + format + mypy clean.
+- LLM keys come only from `Settings` (`.env`), never the process environment:
+  `GOOGLE_API_KEY` → `google_api_key`, and `get_llm` passes `api_key=`
+  explicitly for every provider (DECISIONS 69). Do not print or commit keys.
 - Phase 3 (lineage/impact) remains complete: `lineage/{manifest,graph,
   columns,impact}.py`, `dqs impact`, parsed dbt failures in
   `dq.pipeline_runs`; report `docs/phase-notes/phase-3.md`, packet
@@ -140,7 +143,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (68 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (69 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |

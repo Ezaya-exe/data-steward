@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
-from dqs.agents.llm import BudgetTracker, LLMClient, get_llm, redact_secrets
+from dqs.agents.llm import BudgetTracker, LLMClient, get_llm, redact_secrets, settings_secrets
 from dqs.config import Settings, load_settings
 from dqs.errors import DqsError
 
@@ -230,7 +230,7 @@ def run_smoke(provider: str, model: str, *, settings: Settings | None = None) ->
                     latency_ms=metrics[0],
                     input_tokens=metrics[1],
                     output_tokens=metrics[2],
-                    detail=redact_secrets(str(exc)),
+                    detail=redact_secrets(str(exc), secrets=settings_secrets(resolved)),
                 )
             )
         except Exception as exc:  # provider/network errors are probe failures
@@ -243,7 +243,9 @@ def run_smoke(provider: str, model: str, *, settings: Settings | None = None) ->
                     latency_ms=metrics[0],
                     input_tokens=metrics[1],
                     output_tokens=metrics[2],
-                    detail=redact_secrets(f"{type(exc).__name__}: {exc}"),
+                    detail=redact_secrets(
+                        f"{type(exc).__name__}: {exc}", secrets=settings_secrets(resolved)
+                    ),
                 )
             )
     return SmokeReport(provider=provider, model=model, results=results)

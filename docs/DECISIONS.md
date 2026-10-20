@@ -363,3 +363,17 @@ entry each; newest last.
     nodes (Phase 3 impact); `get_pipeline_run` also needs successful runs and
     their log excerpt. Ordering is by `run_id DESC` (the table's bigserial),
     not by a file on disk.
+69. **API keys come from `Settings`, never from the process environment.**
+    `get_llm` passes `api_key=` explicitly for anthropic, openai,
+    google_genai, openai_compatible and ollama; no provider client is allowed
+    to fall back to `os.environ`. `GOOGLE_API_KEY` now maps to
+    `Settings.google_api_key` (`.env.example` updated). Reason: a stray shell
+    variable silently selected a different account and produced the opaque
+    "API key required for Gemini Developer API" error even though `.env` had
+    a key. A unit test stubs `init_chat_model` and asserts the constructor
+    receives the Settings value for every provider, including when
+    `GOOGLE_API_KEY` is set differently in the environment. Keys are redacted
+    by value in logs/errors (`settings_secrets`) and by Google key shape
+    (`AIza…`) when a provider quotes an unknown key. `langchain-google-genai`
+    is installed (4.4.2), so the earlier optional-package caveat in entry 62
+    is superseded.

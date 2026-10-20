@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{10,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+"),
     re.compile(r"(?i)((?:api[_-]?key|token|password)\s*[=:]\s*)\S+"),
@@ -65,9 +66,11 @@ def redact_secrets(text: str, *, secrets: Sequence[str] = ()) -> str:
     return redacted
 
 
-def _settings_secrets(settings: Settings) -> list[str]:
+def settings_secrets(settings: Settings) -> list[str]:
+    """Secret values to redact from logs/errors (never log this list itself)."""
     return [
         settings.anthropic_api_key,
+        settings.google_api_key,
         settings.openai_api_key,
         settings.llm_api_key,
         settings.github_token,
@@ -316,7 +319,7 @@ class LLMClient:
             response = runnable.invoke(messages, **kwargs)
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
-            error = redact_secrets(str(exc), secrets=_settings_secrets(load_settings()))
+            error = redact_secrets(str(exc), secrets=settings_secrets(load_settings()))
             self.calls.append(
                 LLMCallRecord(
                     provider=self.provider,
@@ -370,6 +373,11 @@ class LLMClient:
 def get_llm(provider: str, model: str, *, settings: Settings | None = None) -> BaseChatModel:
     """Construct the configured chat model (the only `init_chat_model` call).
 
+    Every provider receives `api_key` explicitly from `Settings`; the process
+    environment is never used as a fallback. This keeps `.env` the single
+    source of truth and prevents a stray shell variable from selecting a
+    different account.
+
     `openai_compatible` is the escape hatch for any OpenAI-style endpoint
     (DeepSeek, Kimi, GLM, OpenRouter). `ollama` uses its OpenAI-compatible
     `/v1` endpoint, so no extra integration package is required. `fake` is
@@ -409,18 +417,28 @@ def get_llm(provider: str, model: str, *, settings: Settings | None = None) -> B
                 temperature=0,
             )
         if normalized == "anthropic":
-            kwargs: dict[str, Any] = {"temperature": 0}
-            if resolved.anthropic_api_key:
-                kwargs["api_key"] = resolved.anthropic_api_key
-            return init_chat_model(model, model_provider="anthropic", **kwargs)
+            return init_chat_model(
+                model,
+                model_provider="anthropic",
+                api_key=resolved.anthropic_api_key,
+                temperature=0,
+            )
         if normalized == "openai":
-            kwargs = {"temperature": 0}
-            if resolved.openai_api_key:
-                kwargs["api_key"] = resolved.openai_api_key
-            return init_chat_model(model, model_provider="openai", **kwargs)
-        # google_genai: the integration package is optional (langchain-google-genai);
-        # init_chat_model raises a clear ImportError when it is absent.
-        return init_chat_model(model, model_provider="google_genai", temperature=0)
+            return init_chat_model(
+                model,
+                model_provider="openai",
+                api_key=resolved.openai_api_key,
+                temperature=0,
+            )
+        # google_genai: always pass the key from Settings. Passing it explicitly
+        # means a process-level GOOGLE_API_KEY cannot silently override the
+        # configured environment (and makes missing-key failures deterministic).
+        return init_chat_model(
+            model,
+            model_provider="google_genai",
+            api_key=resolved.google_api_key,
+            temperature=0,
+        )
     except ConfigError:
         raise
     except ImportError as exc:
@@ -436,7 +454,7 @@ def get_llm(provider: str, model: str, *, settings: Settings | None = None) -> B
         raise LLMError(
             redact_secrets(
                 f"could not initialise {normalized}/{model}: {exc}",
-                secrets=_settings_secrets(resolved),
+                secrets=settings_secrets(resolved),
             )
         ) from exc
 
