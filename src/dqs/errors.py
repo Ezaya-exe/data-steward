@@ -69,5 +69,9 @@ class FixerError(DqsError):
     """The fixer could not build its context or produce a valid FixPlan."""
 
 
+class IssueBuildError(DqsError):
+    """An issue cannot be rendered from the supplied incident artifacts."""
+
+
 class SandboxError(DqsError):
     """The sandbox could not be prepared, built, or cleaned up."""
