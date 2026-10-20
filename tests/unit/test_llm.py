@@ -305,9 +305,7 @@ def test_non_retryable_error_is_not_retried() -> None:
     runnable = _FlakyRunnable([_ProviderError(400)])
     slept: list[float] = []
     retries: list[RetryRecord] = []
-    client = _flaky_client(
-        runnable, max_retries=3, sleep=slept.append, on_retry=retries.append
-    )
+    client = _flaky_client(runnable, max_retries=3, sleep=slept.append, on_retry=retries.append)
     with pytest.raises(_ProviderError):
         client.invoke("hello")
     assert runnable.calls == 1
@@ -331,9 +329,7 @@ def test_retry_stops_at_max_retries() -> None:
 def test_retry_after_beyond_the_total_wait_budget_is_not_slept() -> None:
     runnable = _FlakyRunnable([_ProviderError(429, retry_after="120")])
     slept: list[float] = []
-    client = _flaky_client(
-        runnable, max_retries=3, max_retry_wait_seconds=30.0, sleep=slept.append
-    )
+    client = _flaky_client(runnable, max_retries=3, max_retry_wait_seconds=30.0, sleep=slept.append)
     with pytest.raises(_ProviderError):
         client.invoke("hello")
     assert runnable.calls == 1
