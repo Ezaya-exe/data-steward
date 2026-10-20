@@ -314,3 +314,52 @@ entry each; newest last.
     any failure. Phase 3 has no LLM anywhere; unit tests assert the template
     output. The CLI also persists the report into `dq.incidents.impact` and
     the incident reader now carries `root_cause`/`impact`/`resolution` jsonb.
+
+## Phase 4a (2026-10-20)
+
+62. **Provider set is `anthropic | openai | google_genai | ollama |
+    openai_compatible | fake`.** `openai_compatible` uses `LLM_BASE_URL` +
+    `LLM_API_KEY` (DeepSeek, Kimi, GLM, OpenRouter); `ollama` is routed
+    through its OpenAI-compatible `/v1` endpoint with `langchain-openai`, so
+    no new `langchain-ollama` dependency is needed. `google_genai` stays
+    optional: `init_chat_model` raises a clear `ImportError`, which we wrap
+    with install guidance; `langchain-google-genai` is not installed now.
+63. **`FakeChatModel` is a wiring fixture, never a benchmark model.** It is
+    deterministic and bounded: no bound tools → one text answer; a bound
+    Pydantic schema → one schema-valid tool call; ordinary bound tools → two
+    tool calls then a final text answer (exactly enough to exercise a
+    three-step loop). It makes no network calls and synthesizes token counts
+    so recorder/budget tests can assert real plumbing. AGENTS §7.9 still
+    forbids quoting fake results as benchmark evidence.
+64. **Rename ranking weights: name similarity 0.45, type match 0.35, value
+    overlap 0.20.** Name/type dominate because a rename keeps the column's
+    meaning; value overlap is evidence, not proof (a clean column can share
+    values with the missing one). Type match requires a successfully inferred
+    logical type, so an all-NULL new column never gets free type points. The
+    F1 fixture (`customer_id` → `cust_id`) ranks `cust_id` first.
+65. **Every tool result crosses the model boundary as data**: compact JSON
+    (sorted keys) inside `<data>…</data>`, at most 4 KB. Truncation keeps
+    *valid JSON* by returning `{"truncated":true,"preview":"…"}` instead of a
+    cut string. Tool errors (`DqsError`, validation `ValueError`, DB errors)
+    are returned as data so the investigator can correct itself; programming
+    errors still raise. This is the §7.6 prompt-injection boundary.
+66. **SQL guard is a positive allowlist, with an independent DB backstop.**
+    Reject before parsing when a real (non-quoted, non-comment) semicolon
+    appears before the end; then exactly one sqlglot postgres statement,
+    top-level `SELECT`/`WITH … SELECT`, no DML/DDL/COPY/MERGE/SET/transaction
+    nodes anywhere (including CTEs), no `SELECT INTO`, no locking clauses, no
+    catalog-qualified or unqualified relations outside `raw/staging/marts/dq`,
+    and no `pg_*`, `lo_*`, `dblink*`, `set_config`, `current_setting` or XML
+    admin functions. Execution uses `SET TRANSACTION READ ONLY`,
+    `statement_timeout ≤ 5000 ms`, and a hard `LIMIT` cap of 200. False
+    rejections are accepted; silent acceptance is not.
+67. **Budget boundaries are strict (`>`), not `≥`**: exactly `MAX_TOOL_CALLS`
+    calls and exactly the token budget are allowed; the next event raises
+    `BudgetExceeded`. The clock is injectable for deterministic timeout tests,
+    and a future loop must call `check()` before each step (Phase 4b wires the
+    escalation/`UNKNOWN` result).
+68. **`dbt_run.latest_run` reads the newest run whether or not it failed.**
+    The existing `latest_run_for_batch` intentionally requires parsed failing
+    nodes (Phase 3 impact); `get_pipeline_run` also needs successful runs and
+    their log excerpt. Ordering is by `run_id DESC` (the table's bigserial),
+    not by a file on disk.
