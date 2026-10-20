@@ -25,6 +25,7 @@ import sqlalchemy as sa
 from pydantic import ValidationError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from tests.helpers import oracle
 
 from dqs import db as dbmod
 from dqs import dbt_run
@@ -244,6 +245,69 @@ def test_hand_written_good_patch_passes_and_cleans_up(
             {"i": plan.incident_id},
         ).fetchall()
     assert [(row[0], row[1]) for row in attempts] == [(1, True)]
+    _assert_no_sandbox(engine)
+
+
+# --- clean-data oracle (Phase 5b) -------------------------------------------------------
+
+
+@pytest.mark.parametrize(("specs", "category", "columns", "old", "new"), GOOD_CASES)
+def test_oracle_confirms_a_good_patch_matches_clean_generated_data(
+    clone: tuple[Settings, Engine],
+    specs: list[str],
+    category: RootCauseCategory,
+    columns: list[str],
+    old: str,
+    new: str,
+) -> None:
+    clone_settings, engine = clone
+    _load_fault(clone_settings, specs)
+    plan = _plan(category=category, columns=columns, old=old, new=new)
+
+    comparison = oracle.compare_patched_staging(
+        clone_settings,
+        plan,
+        engine=engine,
+        fault_date=FAULT_DATE,
+        seed=SEED,
+    )
+
+    assert comparison.build_passed, comparison.detail
+    assert comparison.passed, comparison
+    assert comparison.rows_actual == comparison.rows_expected
+    assert comparison.missing_keys == []
+    assert comparison.unexpected_keys == []
+    assert comparison.mismatched_cells == []
+    _assert_no_sandbox(engine)
+
+
+def test_oracle_catches_a_verifier_pass_that_writes_wrong_values(
+    clone: tuple[Settings, Engine],
+) -> None:
+    """The verifier checks nulls/rows/contract; only the oracle sees wrong values."""
+    clone_settings, engine = clone
+    _load_fault(clone_settings, F1_SPEC)
+    plan = _plan(
+        category=RootCauseCategory.SOURCE_COLUMN_RENAMED,
+        columns=["customer_id"],
+        old=F1_OLD,
+        new="    coalesce(customer_id::integer, 1) as customer_id,",
+    )
+
+    verdict = sandbox.verify_fix(clone_settings, plan, engine=engine)
+    assert verdict.passed, (verdict.failed_criteria, verdict.criteria)
+
+    comparison = oracle.compare_patched_staging(
+        clone_settings,
+        plan,
+        engine=engine,
+        fault_date=FAULT_DATE,
+        seed=SEED,
+    )
+    assert comparison.build_passed, comparison.detail
+    assert comparison.passed is False
+    assert comparison.mismatched_cells
+    assert any("customer_id" in cell for cell in comparison.mismatched_cells)
     _assert_no_sandbox(engine)
 
 
