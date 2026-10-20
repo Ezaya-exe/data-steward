@@ -458,3 +458,69 @@ entry each; newest last.
     because lifecycle transitions belong to the Phase 6 workflow. It accepts
     `--provider/--model` so the fake provider can exercise the CLI without a
     real key.
+
+## Phase 5a — sandbox verification (2026-10-20)
+
+80. **`FixPlan` carries the incident facts verification needs, not only the
+    §10.5 prose fields.** Added `incident_id`, `batch_id`, `category`,
+    `affected_table` and `affected_columns` alongside `summary/edits/rationale/
+    expected_effect/risk`. Reason: relevance, the targeted check and the row
+    denominator are deterministic SQL decisions; guessing them from a patch
+    would make verification ambiguous and easy to game.
+81. **Plan limits live on the Pydantic model, not only in the prompt:** at most
+    3 edits and at most 4096 UTF-8 bytes of replacement text per plan, with
+    empty paths, NUL bytes, padded paths, no-op edits and non-`raw.*` affected
+    tables rejected. A plan that breaks a limit cannot be constructed, so the
+    verifier never has a half-valid plan.
+82. **The edit allowlist is fail-closed and Windows-aware.** Paths must be
+    relative, use `/` or `\`, resolve after `resolve()` inside
+    `warehouse/dbt_project/models/`, end in `.sql`, and contain no `..`,
+    absolute/drive/UNC prefix, NUL, alternate-data-stream colon, empty segment,
+    reserved device name, trailing dot/space or symlink/junction component.
+    Case and separators are normalized; an optional `warehouse/dbt_project/`
+    prefix is stripped. The exact-match `old` string must occur once.
+83. **Relevance uses a read-only manifest.** An edited model must be a
+    `models/staging/*.sql` dbt model whose direct `depends_on` includes the
+    source node for the incident's `raw.<table>`. `load_manifest(...,
+    regenerate_when_stale=False)` is deliberate: verification must never run
+    `dbt compile` in the real project and overwrite `target/manifest.json` (the
+    Phase-3 torn-manifest lesson).
+84. **Edits are applied to bytes, sequentially.** The temp copy's file is read
+    as UTF-8 bytes, `old` must occur exactly once at that point, and untouched
+    CRLF/LF text stays byte-identical. This makes reviewable diffs and avoids
+    Python newline translation changing an unrelated line.
+85. **The sandbox is a temp copy with isolated dbt paths and a minimal child
+    environment.** `target/`, `dbt_packages/`, `logs/` and `__pycache__` are
+    excluded; `--target-path`/`--log-path` point inside the temp project;
+    dbt runs with `shell=False`, a timeout and only PATH/OS basics plus PG*
+    values built from `Settings`. LLM/GitHub API keys are never copied to the
+    child. Sandbox schemas are dropped in `finish()` and again in an outer
+    `finally` for unexpected exceptions.
+86. **The dbt selector is `staging.*+`, a documented superset of the §11
+    `<changed>+`.** Downstream marts reference sibling staging models, and dbt
+    relationship tests live on those siblings; selecting only the changed
+    branch leaves relations missing and fails for an unrelated reason. The
+    sandbox therefore rebuilds every staging model, their tests and all
+    downstream marts in the throwaway schemas.
+87. **Sandbox schema naming follows the project macro.** The base is
+    `dqs_sandbox_<8 hex>` (incident id if present, otherwise plan hash); the
+    macro creates `<base>_staging` and `<base>_marts`. Cleanup validates every
+    name against `^dqs_sandbox_[a-z0-9_]{1,40}$` before `DROP ... CASCADE`, and
+    `dqs verify cleanup` drops every stale `dqs_sandbox_*` schema. The staged
+    profiler accepts this steward-owned schema pattern in addition to the dev
+    `staging`/`marts`.
+88. **Pass criteria are all-of, deterministic and deliberately narrow:** dbt
+    build + its tests exit 0; conformance to the published staging contract
+    using only schema/type/null/unique/allowed-values (explicit Postgres type
+    mapping included; volume/freshness/range excluded because contracts are
+    one-snapshot); row preservation ≥ 95% (distinct-PK denominator for
+    DUPLICATE_RECORDS); and the category-specific check (no batch nulls for F1,
+    numeric cast + raw-contract range for F3, primary-key uniqueness for F6).
+    An unsupported category cannot pass.
+89. **`dqs verify <plan.json>` and `dqs verify cleanup` are one Typer command
+    with the literal `cleanup` argument.** Typer consumes a group's positional
+    argument before resolving a subcommand, so a group + `cleanup` command
+    would make `dqs verify cleanup` parse `cleanup` as a plan path. The
+    single-command form keeps both required surfaces exact. A failed verdict
+    exits 1; a passing attempt is appended to `dq.fix_attempts` with the next
+    `attempt_no` for its incident.

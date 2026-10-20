@@ -1,16 +1,33 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-20 (Phase 4b complete) · Do not treat this file as a
+Last updated: 2026-10-20 (Phase 5a complete) · Do not treat this file as a
 spec; AGENTS.md is rules, docs/PHASES.md is order, docs/ARCHITECTURE.md is
 design.
 
 ## Current state
 
-- **Phase 4 (4a + 4b) is complete and ready for review.** Phase 4b report:
+- **Phase 5a (deterministic fix verification) is complete and ready for
+  review.** Phase 5a report: `docs/phase-notes/phase-5a.md`; review packet:
+  `docs/review/phase-5a-review.md`. **Do not start Phase 5b** (fixer agent,
+  issue builder, `plan-fix`) until the owner says so.
+- **Phase 5a deliverables**: `models/fix.py` (`Edit`, `FixPlan`,
+  `CriterionResult`, `VerificationResult`, limits), `verify/patch.py`
+  (Windows-hardened allowlist, exact-match application, relevance, temp copy,
+  schema naming), `verify/sandbox.py` (isolated dbt build, minimal env,
+  timeout, cleanup, `dq.fix_attempts`), `verify/criteria.py` (contract
+  conformance, 95% row preservation, category targeted checks),
+  `dqs verify <plan.json>` and `dqs verify cleanup`, DECISIONS 80–89.
+  No LLM code in this phase.
+- Phase 5a acceptance is real-dbt on faulted clones: three hand-written good
+  patches (F1 coalesce, F3 regexp_replace, F6 row_number dedupe) pass; eleven
+  bad/adversarial plans fail the asserted criterion (row preservation,
+  contract conformance, dbt build/excerpt, targeted check, allowlist,
+  relevance, exact match, size limit). The real manifest and dev layer counts
+  are unchanged; killed/failing runs leave no `dqs_sandbox_*` schema.
+- **Phase 4 (4a + 4b) is complete.** Phase 4b report:
   `docs/phase-notes/phase-4b.md`; review packet:
   `docs/review/phase-4b-review.md`. The Phase-4 gate is met (F1/F4 step
-  timelines, sample `RootCause`, token usage). **Do not start Phase 5** (fix
-  planner / sandbox verification) until the owner says so.
+  timelines, sample `RootCause`, token usage).
 - **Phase 4b deliverables**: `models/root_cause.py`, `models/step.py`,
   `agents/steps.py` (memory + Postgres sinks, redaction, 4 KB cap),
   `agents/investigator.py` (explicit bounded loop, native structured output →
@@ -26,9 +43,10 @@ design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **345 unit + 64 integration (non-llm)** passing; **3 real-LLM smoke
+- Tests: **404 unit + 83 integration (non-llm)** passing; **3 real-LLM smoke
   tests** pass with `RUN_LLM_TESTS=1`; ruff + format + mypy clean (88 source
-  files).
+  files). The one skipped unit test is real OS symlink creation (Windows
+  privilege); junction + simulated-symlink branches pass.
 - Real-model evidence (2026-10-20, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
   0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
@@ -44,9 +62,9 @@ design.
   kinds. Contracts: all 13 in `contracts/` are `status: approved`.
 - Warehouse state right now: exactly the clean contract baseline — 30 batches
   (`batch_20260101`…`batch_20260130`) in `dq.batches`, max business_date
-  2026-01-30, no 2026-01-31+ batches, 0 incidents, 0 `dq.agent_steps`.
-  Integration tests clean up their throwaway databases; no `dqs_*` clone
-  persists as of this update.
+  2026-01-30, no 2026-01-31+ batches, 0 incidents, 0 `dq.agent_steps`,
+  0 `dq.fix_attempts`, no `dqs_sandbox_*` schemas. Integration tests clean up
+  their throwaway databases; no `dqs_*` clone persists as of this update.
 - Phase-3 notes (DECISIONS 55–61): failing tests are stored per-run (never
   read from live files); impact scope = column (F1/F2/F10) / table (volume,
   F9) / warehouse (freshness/missing batch); manifest staleness includes
@@ -111,6 +129,12 @@ $env:PGDATABASE='dqs_accept'                 # or any clone with an incident
 $env:RUN_LLM_TESTS='1'
 .venv\Scripts\python -m pytest tests\integration\test_investigator_llm.py -m llm -s -q
 # results: out\phase-4b-llm-smoke-*.json (git-ignored)
+
+# Phase 5a flow — deterministic, no LLM. Point verification at a CLONE too.
+.venv\Scripts\dqs verify path\to\plan.json     # serialized FixPlan; temp dbt project/schemas
+.venv\Scripts\dqs verify cleanup               # drop stale dqs_sandbox_* schemas
+# acceptance (real dbt on F1/F3/F6 faulted clones; leaves dev warehouse untouched)
+.venv\Scripts\python -m pytest tests\integration\test_verify_sandbox_db.py -m integration -s -q
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -169,16 +193,16 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (79 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (89 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
 | `src/dqs/sim/pipeline.py` | seed/day orchestration: generate → load → dbt build |
 | `src/dqs/config.py` | `Settings` (pydantic-settings; env aliases `PGHOST`-style) |
 | `warehouse/dbt_project/models/staging/schema.yml` | Staging tests + relationships (clean-day detection baseline) |
-| `src/dqs/cli.py` | Typer CLI: `db`, `dev`, `sim`, `dbt`, `contracts`, `check`, `monitor`, `incidents`, `incident`, `impact`, `llm` groups |
+| `src/dqs/cli.py` | Typer CLI: `db`, `dev`, `sim`, `dbt`, `contracts`, `check`, `monitor`, `incidents`, `incident`, `impact`, `llm`, `verify` |
 | `src/dqs/db.py` | rw/ro engines, init/reset/ping |
-| `src/dqs/checks/engine.py` | `CheckEngine.run(batch_id)` (raw batch scope) / `run_table` (staged, Phase 5); `from_directory` loads approved contracts |
+| `src/dqs/checks/engine.py` | `CheckEngine.run(batch_id)` (raw batch scope) / `run_table` (staged); `from_directory` loads approved contracts |
 | `src/dqs/incidents.py` | Violation → incident: `fingerprint`, `build_drafts`, `persist_incidents`, `_merge`, `list_incidents`, `get_incident` |
 | `src/dqs/monitor.py` | The §8 loop: `run_monitor`, `default_as_of`, `unchecked_batches`, `parse_as_of` |
 
@@ -188,6 +212,9 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/tools/sql_guard.py` | deny-by-default SQL guard + positive function allowlist + read-only executor (Phase 4a/b) |
 | `src/dqs/tools/registry.py` | the nine typed tools the investigator sees (Phase 4a) |
 | `src/dqs/agents/investigator.py` | explicit bounded tool loop; final channels; provenance; recovery (Phase 4b) |
+| `src/dqs/verify/patch.py` | hardened edit allowlist, exact-match application, relevance rule, temp-project copy (Phase 5a) |
+| `src/dqs/verify/sandbox.py` | isolated dbt build, minimal env, timeout, cleanup, `dq.fix_attempts` persistence (Phase 5a) |
+| `src/dqs/verify/criteria.py` | contract conformance, row preservation, category targeted checks (Phase 5a) |
 | `src/dqs/agents/steps.py` | `dq.agent_steps` sinks: sink-owned seq, redaction, 4 KB cap (Phase 4b) |
 | `src/dqs/agents/prompts/investigator.md` | investigator system prompt (Phase 4b) |
 | `src/dqs/models/root_cause.py` / `step.py` | `RootCause`/`EvidenceItem` and `StepRecord` (Phase 4b) |
@@ -256,16 +283,30 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 
 ## Known limitations / half-done
 
-- dbt project has no `sandbox` target exercised yet (target exists in
-  `profiles.yml`; Phase 5 verifies sandbox behavior).
+- Phase 5a verification uses the `sandbox` target, but the dbt selector is
+  `staging.*+` (a superset of the §11 `<changed>+`); it rebuilds all staging
+  models and marts in throwaway schemas (DECISIONS 86). Expect a whole-warehouse
+  build per verification.
+- Sandbox schema names are incident-derived (`dqs_sandbox_<8 hex>`); concurrent
+  verifications of the same incident collide, and `verify cleanup` is a manual
+  recovery tool, not a concurrency primitive.
+- `dq.fix_attempts` has no unique constraint on `(incident_id, attempt_no)`;
+  sequential single-writer use is safe, concurrent writers are not.
+- Verification checks the changed staging table's contract only; downstream
+  mart contracts are not separately checked. The plan's incident context
+  (`batch_id`, `category`, `affected_table`) is trusted — Phase 5b must fill it
+  from the stored root cause and should cross-validate against `dq.incidents`.
+- Exact-match patch strings are byte-sensitive; the dbt project is LF-normalized.
+  The real OS symlink creation test is skipped on this Windows account;
+  junction and simulated-symlink coverage pass.
 - `dqs sim day` requires the baseline to be seeded first (documented; no
   defensive workaround — intentional).
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
 - `dqs sim day --fault`, contracts, check engine / monitor / incidents,
-  `dqs impact`, the Phase-4a LLM/tool layer and the Phase-4b investigator all
-  work and are tested. **Phase 5** (fix planner + sandbox verification) is next
-  but NOT started.
+  `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator and
+  Phase-5a deterministic sandbox verification all work and are tested.
+  **Phase 5b** (fixer agent + issue builder) is next but NOT started.
 - **The real-model smoke is 3 scenarios × 1 run** (`openai/gpt-oss-120b`,
   2026-10-20): F1 0.93/PR, F4 0.93/ISSUE, F6 0.95/PR. It is not benchmark-grade
   evidence (no repeats/variance, `run_dbt=False` so no failing run record) and
@@ -284,7 +325,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   allowlist deliberately rejects harmless unlisted helpers (false rejection >
   false acceptance). See the phase-4b review for the remaining gaps.
 - `dqs monitor run` enforces raw contracts only; staged/marts contracts are
-  reachable via `CheckEngine.run_table` but not yet run by the monitor (Phase 5).
+  reachable via `CheckEngine.run_table` but not yet run by the monitor (future
+  phase).
 - `test_monitor_e2e.py` seeds the 30-day baseline into a template DB once
   (~2.5 min); `test_lineage_e2e.py` seeds its own module DB (~1 min) —
   acceptable now, revisit if scenarios multiply.
