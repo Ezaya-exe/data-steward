@@ -19,12 +19,12 @@ from dqs.models.contract import Contract
 from dqs.models.enums import ContractStatus
 
 
-def _contract(table: str = "raw.orders") -> Contract:
+def _contract(table: str = "raw.orders", *, rows: int = 13891) -> Contract:
     return Contract(
         table=table,
         layer="raw",
         generated_at=dt.datetime(2026, 1, 30, 0, 0, tzinfo=dt.UTC),
-        baseline={"batches": 30, "first": "2026-01-01", "last": "2026-01-30", "rows": 13891},
+        baseline={"batches": 30, "first": "2026-01-01", "last": "2026-01-30", "rows": rows},
         primary_key=["order_id"],
         columns={
             "order_id": {"logical_type": "integer", "nullable": False, "unique": True},
@@ -127,3 +127,49 @@ def test_approve_flips_only_requested_table(tmp_path) -> None:
     loaded = store.load_contracts(tmp_path)
     assert loaded["raw.orders"].status is ContractStatus.APPROVED
     assert loaded["raw.payments"].status is ContractStatus.DRAFT
+
+
+def test_identical_regeneration_preserves_approved_status(tmp_path) -> None:
+    path = store.save(_contract(), tmp_path)
+    store.approve(tmp_path, None)
+    approved_bytes = path.read_bytes()
+
+    store.save_generated(_contract(), tmp_path)
+
+    assert path.read_bytes() == approved_bytes
+    assert store.load_contract(path).status is ContractStatus.APPROVED
+
+
+def test_changed_regeneration_refuses_to_overwrite_approved(tmp_path) -> None:
+    path = store.save(_contract(), tmp_path)
+    store.approve(tmp_path, None)
+    approved_bytes = path.read_bytes()
+
+    with pytest.raises(ContractError, match="--force"):
+        store.save_generated(_contract(rows=999), tmp_path)
+
+    assert path.read_bytes() == approved_bytes
+    assert store.load_contract(path).status is ContractStatus.APPROVED
+
+
+def test_force_replaces_changed_approved_content_with_a_draft(tmp_path) -> None:
+    path = store.save(_contract(), tmp_path)
+    store.approve(tmp_path, None)
+
+    store.save_generated(_contract(rows=999), tmp_path, force=True)
+
+    reloaded = store.load_contract(path)
+    assert reloaded.status is ContractStatus.DRAFT
+    assert reloaded.baseline.rows == 999
+
+
+def test_regeneration_is_all_or_nothing_when_one_approved_file_conflicts(tmp_path) -> None:
+    store.save(_contract("raw.orders"), tmp_path)
+    store.approve(tmp_path, ["raw.orders"])
+
+    with pytest.raises(ContractError, match="raw.orders"):
+        store.save_generated_many(
+            [_contract("raw.orders", rows=999), _contract("raw.payments")], tmp_path
+        )
+
+    assert not store.contract_path(tmp_path, "raw.payments").exists()

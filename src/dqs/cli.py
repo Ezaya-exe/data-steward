@@ -183,11 +183,19 @@ def build(
 
 
 @contracts_app.command("generate")
-def contracts_generate() -> None:
+def contracts_generate(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace approved contracts whose regenerated content differs (writes drafts).",
+    ),
+) -> None:
     """Profile the current baseline and (re)write contract YAMLs (§7.2).
 
     Deterministic: two runs over the same baseline produce byte-identical
-    files (Phase 2 acceptance), so this is safe to re-run at any time.
+    files (Phase 2 acceptance), so this is safe to re-run at any time. An
+    identical regeneration preserves `status: approved`; changed content over
+    an approved file is refused unless `--force` is given.
     """
     settings = load_settings()
     engine = dbmod.make_rw_engine(settings)
@@ -198,12 +206,12 @@ def contracts_generate() -> None:
     finally:
         engine.dispose()
     directory = Path.cwd() / contracts_store.CONTRACTS_DIRNAME
-    written: list[Path] = []
-    for contract in contracts:
-        try:
-            written.append(contracts_store.save(contract, directory))
-        except OSError as exc:
-            _fail(DqsError(f"couldn't write contract file: {exc}"))
+    try:
+        written = contracts_store.save_generated_many(contracts, directory, force=force)
+    except DqsError as exc:
+        _fail(exc)
+    except OSError as exc:
+        _fail(DqsError(f"couldn't write contract file: {exc}"))
     for path in written:
         contract = contracts_store.load_contract(path)
         pk = ",".join(contract.primary_key) or "-"

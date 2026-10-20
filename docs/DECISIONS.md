@@ -377,3 +377,39 @@ entry each; newest last.
     (`AIza…`) when a provider quotes an unknown key. `langchain-google-genai`
     is installed (4.4.2), so the earlier optional-package caveat in entry 62
     is superseded.
+
+## Phase 4b — investigator and hardening (2026-10-20)
+
+70. **`ToolContext` verifies the live database role (`SELECT current_user =
+    dqs_ro`) in `__post_init__`, and `from_settings` is the only factory that
+    builds an engine (`make_ro_engine`).** Reason: Phase-4a review weak point 3
+    — a caller could pass the read/write engine; the READ ONLY transaction was
+    the only protection. The check is on the actual session, not the URL, so a
+    mislabelled engine cannot pass. File-only unit tests use a tiny stub engine
+    whose `current_user` is `dqs_ro`; the integration test also proves the real
+    rw engine is rejected.
+71. **SQL functions are a positive allowlist keyed by sqlglot's canonical
+    name** (`Anonymous.name` or `Func.sql_name()`, lower-cased), replacing the
+    `pg_*`/`lo_*`/`dblink*` denylist. Reason: a denylist can only reject names
+    someone thought of; an allowlist rejects `query_to_xml`, `table_to_xml`,
+    `ts_stat`, `pg_advisory_lock`, `current_setting`, `pg_read_binary_file` and
+    any future admin helper by construction. Qualified/quoted forms
+    (`pg_catalog.pg_sleep`, `"pg_sleep"`) normalize to the same name. False
+    rejections of harmless unlisted helpers (`version()`) are accepted
+    (DECISIONS 66's stance).
+72. **LLM retries are limited to HTTP 429 / 500 / 502 / 503 / 504**, with
+    exponential backoff (`LLM_RETRY_BASE_SECONDS`, default 1 s), `Retry-After`
+    honoured when present (seconds or HTTP-date), `LLM_MAX_RETRIES` (default 3)
+    and a hard cumulative `LLM_RETRY_MAX_WAIT_SECONDS` (default 30 s). If a
+    requested wait would exceed the cumulative cap, the call fails instead of
+    stalling. Other errors are never retried. Each retry emits a `RetryRecord`
+    through an optional hook so the investigator can write it to
+    `dq.agent_steps`; a failing hook is logged, never allowed to mask the
+    provider error (`RetryRecord.retries` also lands on `LLMCallRecord`).
+73. **`contracts generate` preserves `status: approved` when the regenerated
+    content is identical (status normalized away) and refuses changed content
+    unless `--force`.** Reason: approval is a human decision, and regeneration
+    must not silently demote a reviewed rule set to a draft. `--force` writes
+    the newly generated **draft**, so a changed rule set has to be re-approved.
+    The store validates every conflict before writing, so a refused run leaves
+    the catalogue untouched.

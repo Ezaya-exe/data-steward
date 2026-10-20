@@ -69,6 +69,56 @@ def save(contract: Contract, directory: Path) -> Path:
     return path
 
 
+def _normalized_yaml(contract: Contract) -> str:
+    """Content bytes with the status line normalized away (approval is not content)."""
+    return to_yaml(contract.model_copy(update={"status": ContractStatus.DRAFT}))
+
+
+def save_generated(contract: Contract, directory: Path, *, force: bool = False) -> Path:
+    """Save one freshly generated contract while protecting an approved one.
+
+    Approval is a human decision. `dqs contracts generate` is safe to re-run,
+    so an identical regeneration keeps `status: approved` instead of silently
+    turning the rule set back into a draft. If the content really changed, the
+    command refuses (unless `--force`), because a write would otherwise replace
+    a reviewed rule set without a human seeing the diff.
+    """
+    written = save_generated_many([contract], directory, force=force)
+    return written[0]
+
+
+def save_generated_many(
+    contracts: Sequence[Contract], directory: Path, *, force: bool = False
+) -> list[Path]:
+    """Validate every approved-file conflict first, then write all contracts.
+
+    All-or-nothing: a refused overwrite must not leave a half-regenerated
+    catalogue behind. `--force` replaces changed content with the generated
+    **draft**, so the change has to be re-approved explicitly.
+    """
+    prepared: list[Contract] = []
+    conflicts: list[Path] = []
+    for contract in contracts:
+        path = contract_path(directory, contract.table)
+        if path.exists():
+            existing = load_contract(path)
+            if existing.status is ContractStatus.APPROVED:
+                if _normalized_yaml(existing) == _normalized_yaml(contract):
+                    prepared.append(contract.model_copy(update={"status": ContractStatus.APPROVED}))
+                    continue
+                if not force:
+                    conflicts.append(path)
+                    continue
+        prepared.append(contract)
+    if conflicts:
+        names = ", ".join(str(path) for path in conflicts)
+        raise ContractError(
+            "refusing to overwrite approved contract(s) with different content: "
+            f"{names}; review the diff and re-run with --force to write drafts"
+        )
+    return [save(contract, directory) for contract in prepared]
+
+
 def load_contract(path: Path) -> Contract:
     """Parse + strictly validate one YAML file (unknown keys are errors)."""
     try:
