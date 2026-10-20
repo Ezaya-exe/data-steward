@@ -9,6 +9,7 @@ added phase by phase — commands are not invented here):
 - `dqs sim seed [--days N] [--seed S] | day --date YYYY-MM-DD [--no-dbt]`  (Phase 1)
 - `dqs dbt build [--target dev|sandbox]`                                    (Phase 1)
 - `dqs verify <plan.json> | cleanup`                                        (Phase 5a)
+- `dqs incident plan-fix <id>`                                              (Phase 5b)
 
 Errors from the layer below are caught and printed; the process exit code is
 non-zero so scripts/CI can rely on it.
@@ -33,6 +34,7 @@ from dqs import dbt_run
 from dqs import dev as devmod
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
+from dqs.agents import fixer as fixer_mod
 from dqs.agents.investigator import NODE_NAME, investigate
 from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.smoke import run_smoke
@@ -47,7 +49,10 @@ from dqs.lineage.impact import build_impact_report
 from dqs.models.contract import Contract
 from dqs.models.faults import FaultSpec
 from dqs.models.fix import FixPlan
+from dqs.models.impact import ImpactReport
+from dqs.models.root_cause import RootCause
 from dqs.models.violation import Violation
+from dqs.resolve import plan_resolution
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
 from dqs.tools.base import ToolContext
@@ -501,6 +506,135 @@ def incident_investigate(
             preview,
         )
     console.print(table)
+
+
+@incident_app.command("plan-fix")
+def incident_plan_fix(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+    provider: str | None = typer.Option(None, help="Provider override (default: LLM_PROVIDER)."),
+    model: str | None = typer.Option(None, help="Model override (default: LLM_MODEL)."),
+) -> None:
+    """Plan and verify a fix for one investigated incident (§10.5, §11).
+
+    The command refuses to plan when deterministic routing says the incident is
+    not PR-eligible. Every attempt is persisted to `dq.fix_attempts` and every
+    model call to `dq.agent_steps`, so a failed run leaves a complete timeline.
+    """
+    try:
+        identifier = uuid.UUID(incident_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+        if incident is None:
+            _fail(DqsError(f"no incident with id {incident_id}"))
+        if incident.root_cause is None:
+            _fail(
+                DqsError(f"incident {incident_id} has no stored root cause; run investigate first")
+            )
+        if incident.impact is None:
+            _fail(DqsError(f"incident {incident_id} has no stored impact report; run impact first"))
+        try:
+            root_cause = RootCause.model_validate(incident.root_cause)
+            impact = ImpactReport.model_validate(incident.impact)
+        except ValidationError as exc:
+            _fail(DqsError(f"stored incident artifacts do not validate:\n{exc}"))
+
+        candidates = fixer_mod.select_candidates(incident, root_cause)
+        resolution = plan_resolution(root_cause.category, root_cause.confidence, bool(candidates))
+        console.print(
+            f"incident {str(identifier)[:8]} category={root_cause.category.value} "
+            f"confidence={root_cause.confidence:.2f} "
+            f"candidates={', '.join(candidate.name for candidate in candidates) or '-'} "
+            f"resolution={resolution.value}",
+            markup=False,
+        )
+        if resolution.value != "PR":
+            console.print(
+                f"[yellow]routing says {resolution.value}[/yellow] — plan-fix only runs for "
+                "PR-eligible incidents; file an issue instead"
+            )
+            raise typer.Exit(1)
+
+        chosen_provider = provider or settings.llm_provider
+        chosen_model = model or settings.llm_model
+        budget = BudgetTracker.from_settings(settings)
+        client = LLMClient.from_provider(
+            chosen_provider, chosen_model, settings=settings, budget=budget
+        )
+        sink = DbStepSink(
+            engine, node=fixer_mod.NODE_NAME, incident_id=identifier, settings=settings
+        )
+        result = fixer_mod.plan_fix(
+            incident,
+            root_cause,
+            impact,
+            client=client,
+            sink=sink,
+            settings=settings,
+            engine=engine,
+            candidates=candidates,
+        )
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+
+    console.print(
+        f"provider={chosen_provider} model={chosen_model} attempts={result.attempts_used} "
+        f"tokens={result.tokens} retries={result.retries} "
+        f"budget_exceeded={result.budget_exceeded}"
+    )
+    attempts = Table(show_header=True, header_style="bold")
+    for column in ("attempt", "verdict", "failed criteria", "plan", "duration_s"):
+        attempts.add_column(column)
+    for attempt in result.attempts:
+        verification = attempt.verification
+        summary = attempt.plan.summary if attempt.plan is not None else "-"
+        attempts.add_row(
+            str(attempt.attempt_no),
+            "PASS" if verification.passed else "FAIL",
+            ", ".join(verification.failed_criteria) or "-",
+            summary[:100],
+            f"{verification.duration_s:.1f}",
+        )
+    console.print(attempts)
+
+    final = result.final_verification
+    if final is not None and final.criteria:
+        criteria = Table(show_header=True, header_style="bold")
+        for column in ("criterion", "verdict", "detail"):
+            criteria.add_column(column)
+        for criterion in final.criteria:
+            criteria.add_row(
+                criterion.name,
+                "PASS" if criterion.passed else "FAIL",
+                criterion.detail[:140],
+            )
+        console.print(criteria)
+
+    if not result.passed:
+        if result.budget_exceeded:
+            console.print("[red]FAIL[/red] the model budget was exhausted before a fix passed")
+        else:
+            console.print(
+                f"[red]FAIL[/red] {result.attempts_used} attempt(s) exhausted without a "
+                "passing fix; all attempts are stored in dq.fix_attempts"
+            )
+        if final is not None and final.dbt_log_excerpt:
+            console.print("[bold]dbt excerpt[/bold]")
+            console.print(final.dbt_log_excerpt)
+        raise typer.Exit(1)
+
+    passed_plan = result.attempts[-1].plan
+    if passed_plan is not None:
+        console.print_json(data=passed_plan.model_dump(mode="json"))
+    console.print(
+        f"[green]PASS[/green] fix verified in attempt {result.attempts[-1].attempt_no}; "
+        "plan and attempt are persisted"
+    )
 
 
 @app.command("impact")
