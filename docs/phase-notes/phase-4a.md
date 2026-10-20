@@ -47,7 +47,7 @@ Companion review packet: `docs/review/phase-4a-review.md`.
 * `src/dqs/dbt_run.py` — `latest_run` (newest run, success or failure) so
   `get_pipeline_run` can show successful builds too (DECISIONS 68).
 * Tests: `tests/unit/test_llm.py`, `test_sql_guard.py`, `test_tools.py`
-  (72 tests) and `tests/integration/test_sql_guard_db.py` (6 tests).
+  (74 tests) and `tests/integration/test_sql_guard_db.py` (6 tests).
 * `contracts/*.yml` — status `draft` → `approved` (needed by the contract
   tool; all 13 files, no content change beyond the status).
 * `docs/DECISIONS.md` — entries 62–68.
@@ -80,16 +80,16 @@ deferred (table below).
 
 | # | Criterion (in scope for 4a) | Verdict | Evidence |
 |---|---|---|---|
-| 1 | `get_llm` supports the documented providers; `openai_compatible` requires `LLM_BASE_URL`; unknown provider rejected; keys never logged | PASS | `test_llm.py` (11 tests): fake deterministic, missing base URL → `ConfigError`, `excel` rejected, redaction removes `sk-ant-…`/`api_key=…`. Fake smoke runs end-to-end without a key |
+| 1 | `get_llm` supports the documented providers; `openai_compatible` requires `LLM_BASE_URL`; unknown provider rejected; keys never logged | PASS | `test_llm.py` (12 tests): fake deterministic, missing base URL → `ConfigError`, `excel` rejected, redaction removes `sk-ant-…`/`api_key=…`. Fake smoke runs end-to-end without a key |
 | 2 | Per-call latency and token capture (including structured output and failures) | PASS | `test_client_records_latency_and_tokens`; structured probe reports tokens (raw message measured, not the `{"raw",…}` wrapper); failed calls are recorded with a redacted error |
-| 3 | Budget tracker enforces tool calls, tokens and wall clock deterministically | PASS | `test_budget_tool_call_limit`, `test_budget_token_limit`, `test_budget_wall_clock_timeout`, `test_budget_state_reports_remaining`; injected `_Clock` |
+| 3 | Budget tracker enforces tool calls, tokens and wall clock deterministically | PASS | `test_budget_tool_call_limit`, `test_budget_token_limit`, `test_budget_wall_clock_timeout`, `test_budget_state_reports_remaining`; injected `_Clock`. `test_fake_provider_calls_are_counted_by_the_budget` proves `LLMClient` + fake model feeds the tracker (17 tokens); `test_client_raises_when_a_call_exceeds_the_token_budget` proves the raise while the call stays measured |
 | 4 | `dqs llm smoke` = 4 probes, prints pass/fail + latency + tokens, non-zero exit on failure | PASS | CLI run below: all four PASS on `fake`; loop probe shows `model_calls=3`. Failure path: `dqs llm smoke --provider excel` reports four FAIL rows and exits **1** |
 | 5 | All nine tools exist with typed args, read-only behavior, compact JSON wrapped as `<data>` ≤4 KB | PASS | `test_registry_exposes_typed_argument_schemas`, `test_every_registered_tool_wraps_its_output`, `test_wrap_data_is_compact_and_parseable`, `test_wrap_data_truncates_to_four_kb_with_valid_json`; real-warehouse smoke below |
 | 6 | SQL guard rejects DML/DDL/COPY, multi-statement + comment tricks, `SELECT INTO`, locking, unqualified/disallowed schemas, `pg_catalog`, dangerous functions, dangerous CTE bodies; accepts SELECT/WITH; caps LIMIT at 200 | PASS | `test_sql_guard.py`: **35 rejection cases**, **10 accepted cases**, 4 LIMIT-cap tests, empty-SQL test — all passed. Cases include `SELECT 1; -- ; DROP …`, `WITH x AS (DELETE …) SELECT …`, stacked-CTE `UNION … pg_catalog.pg_class` |
 | 7 | DB-level proof that `dqs_ro` blocks writes independently and timeout is real | PASS | `test_sql_guard_db.py`: 6 passed. DELETE/UPDATE/INSERT/`CREATE TABLE` on `dqs_ro` all raise "permission denied"/"read-only" (`WHERE false` + rollback); recursive CTE with `timeout_ms=200` raises `SqlExecutionError` |
 | 8 | Tool tests on fixtures: profile stats correct; F1 rename ranks `cust_id` first | PASS | `test_summarize_batch_profile_on_known_frame_stats`, `test_find_rename_candidates_ranks_cust_id_first_for_f1_case`, `test_rename_does_not_invent_type_match_for_empty_column` |
 | 9 | Hostile sample text flows through as data, never instructions | PASS (boundary only) | `test_data_tool_wraps_hostile_text_as_data`: `IGNORE PREVIOUS INSTRUCTIONS…` is inside a `<data>` JSON string; guard rejects any write it might suggest. The loop-level "no DB change" test requires the investigator (4b) |
-| 10 | Lint, format, mypy and all tests green; dev warehouse untouched | PASS | `ruff check .` → all passed; `ruff format --check .` → 128 files already formatted; mypy → 85 source files clean; **286 unit + 58 integration passed** (integration 330 s). After the suite: 30 batches, 0 incidents, 13,891 `raw.orders`, max date 2026-01-30 |
+| 10 | Lint, format, mypy and all tests green; dev warehouse untouched | PASS | `ruff check .` → all passed; `ruff format --check .` → 128 files already formatted; mypy → 85 source files clean; **288 unit + 58 integration passed** (integration 330 s). After the suite: 30 batches, 0 incidents, 13,891 `raw.orders`, max date 2026-01-30 |
 | 11 | Real-provider LLM smoke on F1/F4/F6 with schema-valid `RootCause` | **DEFERRED to 4b** | No API key is present in this environment (`anthropic_api_key`, `openai_api_key`, `llm_api_key` all empty), and `RootCause` does not exist yet. Fake smoke only proves wiring, not model quality (AGENTS §7.9) |
 | 12 | Budget test with a fake LLM that never stops calling tools terminates at `MAX_TOOL_CALLS` with `UNKNOWN`/escalation | **DEFERRED to 4b** | `BudgetTracker` raises `BudgetExceeded` at the boundary (tested); the loop that catches it and returns an escalation result is the investigator |
 

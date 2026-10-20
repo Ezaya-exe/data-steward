@@ -113,6 +113,34 @@ def test_budget_state_reports_remaining() -> None:
     assert state.seconds_remaining == 10.0
 
 
+def test_fake_provider_calls_are_counted_by_the_budget(settings: Settings) -> None:
+    clock = _Clock()
+    tracker = BudgetTracker(max_tool_calls=3, max_tokens=100, timeout_seconds=10, clock=clock)
+    client = LLMClient(
+        get_llm("fake", "fake-1", settings=settings),
+        provider="fake",
+        model="fake-1",
+        budget=tracker,
+    )
+    client.invoke("hello")
+    assert tracker.llm_calls == 1
+    assert tracker.tokens == 17  # fake emits 12 input + 5 output tokens
+    assert tracker.state().tokens_remaining == 83
+
+
+def test_client_raises_when_a_call_exceeds_the_token_budget(settings: Settings) -> None:
+    tracker = BudgetTracker(max_tool_calls=3, max_tokens=5, timeout_seconds=10, clock=_Clock())
+    client = LLMClient(
+        get_llm("fake", "fake-1", settings=settings),
+        provider="fake",
+        model="fake-1",
+        budget=tracker,
+    )
+    with pytest.raises(BudgetExceeded, match="token budget"):
+        client.invoke("hello")
+    assert len(client.calls) == 1  # the call is still measured before the raise
+
+
 def test_smoke_runs_all_four_probes_on_fake() -> None:
     report = run_smoke("fake", "fake-1", settings=Settings(_env_file=None))
     assert report.passed, [result.detail for result in report.results]

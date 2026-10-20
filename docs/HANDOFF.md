@@ -19,7 +19,7 @@ design.
   `lineage_tool`, `registry`), `dbt_run.latest_run`, DECISIONS 62–68.
   Tests: `test_llm.py`, `test_sql_guard.py`, `test_tools.py`,
   `test_sql_guard_db.py`.
-- Tests: **286 unit + 58 integration** passing; ruff + format + mypy clean.
+- Tests: **288 unit + 58 integration** passing; ruff + format + mypy clean.
 - Phase 3 (lineage/impact) remains complete: `lineage/{manifest,graph,
   columns,impact}.py`, `dqs impact`, parsed dbt failures in
   `dq.pipeline_runs`; report `docs/phase-notes/phase-3.md`, packet
