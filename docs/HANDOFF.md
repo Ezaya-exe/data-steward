@@ -1,25 +1,38 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-20 (Phase 4a complete) · Do not treat this file as a
+Last updated: 2026-10-20 (Phase 4b complete) · Do not treat this file as a
 spec; AGENTS.md is rules, docs/PHASES.md is order, docs/ARCHITECTURE.md is
 design.
 
 ## Current state
 
-- **Phase 4a (LLM wrapper + read-only tools) is complete and ready for
-  review.** Phase report: `docs/phase-notes/phase-4a.md`; review packet:
-  `docs/review/phase-4a-review.md` (acceptance table, weakest points,
-  Phase-4b risks). **Do not start Phase 4b** (investigator loop,
-  `RootCause`, `dqs incident investigate`) until the owner says so.
-- **Phase 4a deliverables**: `agents/llm.py` (only `init_chat_model` call;
-  providers `anthropic|openai|google_genai|ollama|openai_compatible|fake`;
-  per-call latency/tokens; budget tracker; redaction), `agents/smoke.py`
-  (4 probes), `dqs llm smoke`, `tools/` (`base`, `sql_guard`,
-  `readonly_sql`, `profiling`, `renames`, `dbt_tools`, `contracts_tool`,
-  `lineage_tool`, `registry`), `dbt_run.latest_run`, DECISIONS 62–68.
-  Tests: `test_llm.py`, `test_sql_guard.py`, `test_tools.py`,
-  `test_sql_guard_db.py`.
-- Tests: **295 unit + 58 integration** passing; ruff + format + mypy clean.
+- **Phase 4 (4a + 4b) is complete and ready for review.** Phase 4b report:
+  `docs/phase-notes/phase-4b.md`; review packet:
+  `docs/review/phase-4b-review.md`. The Phase-4 gate is met (F1/F4 step
+  timelines, sample `RootCause`, token usage). **Do not start Phase 5** (fix
+  planner / sandbox verification) until the owner says so.
+- **Phase 4b deliverables**: `models/root_cause.py`, `models/step.py`,
+  `agents/steps.py` (memory + Postgres sinks, redaction, 4 KB cap),
+  `agents/investigator.py` (explicit bounded loop, native structured output →
+  `submit_root_cause` → UNKNOWN, evidence provenance filter, model-error
+  recovery), `agents/prompts/investigator.md`, `incidents.save_root_cause`,
+  `dqs incident investigate <id>`. Hardening: `ToolContext` role check, SQL
+  function allowlist, LLM retry policy, contract regeneration guard.
+  DECISIONS 70–79.
+- **Phase 4a deliverables** (unchanged): `agents/llm.py` (only
+  `init_chat_model` call; providers
+  `anthropic|openai|google_genai|ollama|openai_compatible|fake`; per-call
+  latency/tokens; budget tracker; redaction), `agents/smoke.py` (4 probes),
+  `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
+  `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
+  `dbt_run.latest_run`, DECISIONS 62–69.
+- Tests: **345 unit + 64 integration (non-llm)** passing; **3 real-LLM smoke
+  tests** pass with `RUN_LLM_TESTS=1`; ruff + format + mypy clean (88 source
+  files).
+- Real-model evidence (2026-10-20, `openai/gpt-oss-120b` via
+  `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
+  0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
+  `out/phase-4b-llm-smoke-*.json`.
 - LLM keys come only from `Settings` (`.env`), never the process environment:
   `GOOGLE_API_KEY` → `google_api_key`, and `get_llm` passes `api_key=`
   explicitly for every provider (DECISIONS 69). Do not print or commit keys.
@@ -31,8 +44,9 @@ design.
   kinds. Contracts: all 13 in `contracts/` are `status: approved`.
 - Warehouse state right now: exactly the clean contract baseline — 30 batches
   (`batch_20260101`…`batch_20260130`) in `dq.batches`, max business_date
-  2026-01-30, no 2026-01-31+ batches, 0 incidents. Integration tests clean up
-  their throwaway databases; no `dqs_*` clone persists as of this update.
+  2026-01-30, no 2026-01-31+ batches, 0 incidents, 0 `dq.agent_steps`.
+  Integration tests clean up their throwaway databases; no `dqs_*` clone
+  persists as of this update.
 - Phase-3 notes (DECISIONS 55–61): failing tests are stored per-run (never
   read from live files); impact scope = column (F1/F2/F10) / table (volume,
   F9) / warehouse (freshness/missing batch); manifest staleness includes
@@ -69,7 +83,9 @@ docker compose up -d --wait postgres        # or: .venv\Scripts\dqs dev up
 .venv\Scripts\dqs sim day --date 2026-01-31 --fault orders:row_count_drop:ratio=0.5
 
 # Phase 2b flow — NEVER run the monitor against the dev warehouse (it flips
-# batch status to 'checked'); use a clone:  $env:PGDATABASE='dqs_accept'
+# batch status to 'checked'); use a clone:  $env:PGDATABASE='dqs_accept'.
+# `incident investigate` also writes dq.incidents.root_cause and dq.agent_steps,
+# so point it at a clone too.
 .venv\Scripts\dqs contracts approve --all
 .venv\Scripts\dqs check batch batch_20260131
 .venv\Scripts\dqs monitor run                              # default --as-of = max date + 1d
@@ -85,6 +101,16 @@ docker compose up -d --wait postgres        # or: .venv\Scripts\dqs dev up
 $env:LLM_PROVIDER='fake'; .venv\Scripts\dqs llm smoke
 # real endpoint: set LLM_PROVIDER=openai_compatible, LLM_MODEL, LLM_BASE_URL, LLM_API_KEY
 # then run the same `dqs llm smoke` and record provider/model/date in the report.
+
+# Phase 4b flow — investigate is a node, not the workflow. Point it at a CLONE.
+$env:PGDATABASE='dqs_accept'                 # or any clone with an incident
+.venv\Scripts\dqs incident investigate <incident-uuid>
+.venv\Scripts\dqs incident investigate <incident-uuid> --provider fake --model fake-1
+
+# real-model F1/F4/F6 smoke: seeds its own template, clones per scenario, drops all
+$env:RUN_LLM_TESTS='1'
+.venv\Scripts\python -m pytest tests\integration\test_investigator_llm.py -m llm -s -q
+# results: out\phase-4b-llm-smoke-*.json (git-ignored)
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -143,14 +169,14 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (69 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (79 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
 | `src/dqs/sim/pipeline.py` | seed/day orchestration: generate → load → dbt build |
 | `src/dqs/config.py` | `Settings` (pydantic-settings; env aliases `PGHOST`-style) |
 | `warehouse/dbt_project/models/staging/schema.yml` | Staging tests + relationships (clean-day detection baseline) |
-| `src/dqs/cli.py` | Typer CLI: `db`, `dev`, `sim`, `dbt`, `contracts`, `check`, `monitor`, `incidents`, `impact`, `llm` groups |
+| `src/dqs/cli.py` | Typer CLI: `db`, `dev`, `sim`, `dbt`, `contracts`, `check`, `monitor`, `incidents`, `incident`, `impact`, `llm` groups |
 | `src/dqs/db.py` | rw/ro engines, init/reset/ping |
 | `src/dqs/checks/engine.py` | `CheckEngine.run(batch_id)` (raw batch scope) / `run_table` (staged, Phase 5); `from_directory` loads approved contracts |
 | `src/dqs/incidents.py` | Violation → incident: `fingerprint`, `build_drafts`, `persist_incidents`, `_merge`, `list_incidents`, `get_incident` |
@@ -158,16 +184,20 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 
 | `src/dqs/lineage/graph.py` | dbt manifest → networkx DAG; upstream/downstream/nodes_for_raw_table (Phase 3) |
 | `src/dqs/lineage/impact.py` | deterministic ImpactReport builder + `render_summary` Phase-4 hook (Phase 3) |
-| `src/dqs/agents/llm.py` | the ONLY provider construction; per-call tokens/latency; budgets; fake model (Phase 4a) |
-| `src/dqs/tools/sql_guard.py` | deny-by-default SQL guard + read-only executor (Phase 4a) |
-| `src/dqs/tools/registry.py` | the nine typed tools the investigator will see (Phase 4a) |
+| `src/dqs/agents/llm.py` | the ONLY provider construction; per-call tokens/latency; budgets; retries; fake model (Phase 4a/b) |
+| `src/dqs/tools/sql_guard.py` | deny-by-default SQL guard + positive function allowlist + read-only executor (Phase 4a/b) |
+| `src/dqs/tools/registry.py` | the nine typed tools the investigator sees (Phase 4a) |
+| `src/dqs/agents/investigator.py` | explicit bounded tool loop; final channels; provenance; recovery (Phase 4b) |
+| `src/dqs/agents/steps.py` | `dq.agent_steps` sinks: sink-owned seq, redaction, 4 KB cap (Phase 4b) |
+| `src/dqs/agents/prompts/investigator.md` | investigator system prompt (Phase 4b) |
+| `src/dqs/models/root_cause.py` / `step.py` | `RootCause`/`EvidenceItem` and `StepRecord` (Phase 4b) |
 
 (There are also: `src/dqs/errors.py`, `src/dqs/dev.py`, `src/dqs/checks/{schema,types,nulls,unique,fk,ranges,volume,freshness}.py`,
 `src/dqs/contracts/{store,generator,profiler,fitting,parsing,generation}.py`,
 `src/dqs/models/{contract,violation,incident,enums}.py`, `tests/conftest.py`,
 `tests/unit/test_*.py`, `tests/integration/test_*.py`, dbt `models/*.sql`,
-`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a}.md`,
-`docs/review/phase-{2b,3,4a}-review.md`.)
+`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b}.md`,
+`docs/review/phase-{2b,3,4a,4b}-review.md`.)
 
 ## DECISIONS.md entries Phase 2 must build on
 
@@ -233,18 +263,26 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - `sim seed` always rebuilds all dbt models per day (30 × full build ≈ 3–4 min);
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
 - `dqs sim day --fault`, contracts, check engine / monitor / incidents,
-  `dqs impact`, and the Phase-4a LLM/tool layer all work and are tested
-  (Phases 2a+b/3/4a). **Phase 4b** (investigator loop, `RootCause`,
-  `dqs incident investigate`) is next but NOT started.
-- Phase 4a has **not been run against a real model** in this environment: no
-  Anthropic/OpenAI/LLM key is present, so only `LLM_PROVIDER=fake` smoke was
-  executed. Do not quote it as model evidence (AGENTS §7.9).
-- The tools are not wired to an agent yet; `ToolContext` must be built with
-  `make_ro_engine` in Phase 4b (the `READ ONLY` transaction still blocks
-  writes, but the role is not enforced by the constructors).
-- SQL guard is parser + curated tests, not fuzzed; it may reject harmless
-  `pg_*`/`lo_*`/`dblink*` names by design. See phase-4a review for the
-  adversarial-testing gap.
+  `dqs impact`, the Phase-4a LLM/tool layer and the Phase-4b investigator all
+  work and are tested. **Phase 5** (fix planner + sandbox verification) is next
+  but NOT started.
+- **The real-model smoke is 3 scenarios × 1 run** (`openai/gpt-oss-120b`,
+  2026-10-20): F1 0.93/PR, F4 0.93/ISSUE, F6 0.95/PR. It is not benchmark-grade
+  evidence (no repeats/variance, `run_dbt=False` so no failing run record) and
+  the prompt was not tuned on it. Do not quote it as a benchmark (AGENTS §7.9).
+- The investigator recovers from a provider rejecting a model-invented
+  `RootCause`/`json` tool call **after evidence exists** by trying the final
+  channel; before any evidence the error still raises. Failed calls record
+  latency/error but zero tokens, so token budgeting under-counts failures
+  (DECISIONS 76).
+- `dqs incident investigate` leaves the incident status unchanged: lifecycle
+  transitions belong to the Phase 6 workflow. It persists `root_cause` + steps.
+- `dq.agent_steps` has no unique constraint on `(incident_id, node, seq)`; the
+  sink reads `MAX(seq)` first, which is safe for one sequential run per
+  incident, not for concurrent writers (Phase 6 assumption).
+- SQL guard is parser + curated tests, not fuzzed. The positive function
+  allowlist deliberately rejects harmless unlisted helpers (false rejection >
+  false acceptance). See the phase-4b review for the remaining gaps.
 - `dqs monitor run` enforces raw contracts only; staged/marts contracts are
   reachable via `CheckEngine.run_table` but not yet run by the monitor (Phase 5).
 - `test_monitor_e2e.py` seeds the 30-day baseline into a template DB once

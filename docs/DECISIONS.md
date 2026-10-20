@@ -413,3 +413,48 @@ entry each; newest last.
     the newly generated **draft**, so a changed rule set has to be re-approved.
     The store validates every conflict before writing, so a refused run leaves
     the catalogue untouched.
+74. **The investigator loop is hand-written, and budgets are checked before
+    every model turn.** Exactly `MAX_TOOL_CALLS` tool calls are allowed, then
+    the loop stops without another model call and returns
+    `UNKNOWN`/`ISSUE`/confidence 0 with the partial findings in `summary` and
+    evidence only from calls that actually ran. Token/time overruns follow the
+    same escalation. Reason: a framework's hidden iteration cannot guarantee
+    "never loop forever" or that the expensive final call is skipped once the
+    budget is exhausted.
+75. **Final `RootCause` channels, in order: native structured output, then a
+    `submit_root_cause` tool, then the UNKNOWN escalation.** The provider smoke
+    (`dqs llm smoke`) passed native structured output, so it is primary; the
+    tool fallback covers OpenAI-compatible endpoints whose tool-call validation
+    rejects a native schema call. Both channels were observed on the real
+    F1/F4/F6 smoke, and every answer re-validates as `RootCause`. The chosen
+    channel is written to `dq.agent_steps` (`final_channel`).
+76. **A provider error after at least one tool call is recovered through the
+    final-answer channel instead of aborting the investigation.** Reason: the
+    configured OpenAI-compatible model sometimes tries to call a tool named
+    `RootCause`/`json` when it decides it is finished; the gateway rejects that
+    request with HTTP 400 before LangChain returns a message. Aborting would
+    throw away valid evidence. The recovery keeps the evidence and asks for the
+    structured answer again; if that also fails, the result is `UNKNOWN` +
+    `ISSUE` with partial findings. Before any evidence exists, the original
+    `InvestigatorError` still surfaces (there is nothing honest to report).
+77. **Evidence provenance is enforced deterministically.** After the answer is
+    parsed, any `EvidenceItem` whose `tool` was not called in this run is
+    dropped and an `evidence_dropped` system step records the fabricated item
+    and the called-tool set. An empty evidence list is preferred to a plausible
+    invention. A model that cites a failed tool call is not dropped (the call
+    happened); the finding is still the model's interpretation of the error.
+78. **Every LLM/tool step is written through a `StepSink` that owns `seq`.**
+    The DB sink starts after `MAX(seq)` for the same incident+node, so a rerun
+    appends a new timeline instead of colliding. Payloads are recursively
+    redacted (`settings_secrets` + token shapes) and capped at 4 KB with a
+    valid `{"truncated":true,"preview":…}` object. The LLM hook records
+    provider/model, a compact prompt/response summary, tokens and latency for
+    every call including the final structured one; retries write a separate
+    `llm_retry` system step.
+79. **The manual node command is `dqs incident investigate <id>` (singular
+    group).** `docs/PHASES.md` names this exact command; inspection stays under
+    the existing `dqs incidents list|show`. The command persists only
+    `root_cause` and the step log — it does not change the incident status,
+    because lifecycle transitions belong to the Phase 6 workflow. It accepts
+    `--provider/--model` so the fake provider can exercise the CLI without a
+    real key.
