@@ -340,30 +340,40 @@ def _table_exists(engine: Engine, schema: str, table: str) -> bool:
     return row is not None
 
 
-def persist_attempt(
+def next_attempt_number(engine: Engine, incident_id: Any) -> int:
+    """The next attempt number for an incident (1 for the first attempt)."""
+    if incident_id is None:
+        return 1
+    try:
+        with engine.connect() as conn:
+            current: Any = conn.execute(
+                text(
+                    "SELECT coalesce(max(attempt_no), 0) FROM dq.fix_attempts "
+                    "WHERE incident_id = :i"
+                ),
+                {"i": incident_id},
+            ).scalar_one()
+    except SQLAlchemyError as exc:
+        raise DatabaseError(f"could not read previous fix attempts: {exc}") from exc
+    return int(current) + 1
+
+
+def persist_attempt_payload(
     engine: Engine,
-    plan: FixPlan,
-    result: VerificationResult,
     *,
-    attempt_no: int | None = None,
+    incident_id: Any,
+    attempt_no: int,
+    plan: FixPlan | dict[str, Any],
+    result: VerificationResult,
 ) -> int:
-    """Append the plan + verdict to `dq.fix_attempts` and return the attempt number."""
-    if attempt_no is None:
-        if plan.incident_id is None:
-            attempt_no = 1
-        else:
-            try:
-                with engine.connect() as conn:
-                    current: Any = conn.execute(
-                        text(
-                            "SELECT coalesce(max(attempt_no), 0) FROM dq.fix_attempts "
-                            "WHERE incident_id = :i"
-                        ),
-                        {"i": plan.incident_id},
-                    ).scalar_one()
-                attempt_no = int(current) + 1
-            except SQLAlchemyError as exc:
-                raise DatabaseError(f"could not read previous fix attempts: {exc}") from exc
+    """Append one attempt to `dq.fix_attempts`, including unverified drafts.
+
+    The retry loop persists through this one function so a rejected/invalid
+    plan and a verified plan share the same attempt numbering. `plan` is a
+    `FixPlan` for anything the verifier saw, or the raw draft payload when the
+    model output could not become a `FixPlan`.
+    """
+    payload = plan.model_dump(mode="json") if isinstance(plan, FixPlan) else plan
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -373,9 +383,9 @@ def persist_attempt(
                     "VALUES (:i, :n, CAST(:p AS jsonb), CAST(:v AS jsonb), :ok)"
                 ),
                 {
-                    "i": plan.incident_id,
+                    "i": incident_id,
                     "n": attempt_no,
-                    "p": json.dumps(plan.model_dump(mode="json")),
+                    "p": json.dumps(payload),
                     "v": json.dumps(result.model_dump(mode="json")),
                     "ok": result.passed,
                 },
@@ -383,6 +393,26 @@ def persist_attempt(
     except SQLAlchemyError as exc:
         raise DatabaseError(f"could not persist fix attempt: {exc}") from exc
     return attempt_no
+
+
+def persist_attempt(
+    engine: Engine,
+    plan: FixPlan,
+    result: VerificationResult,
+    *,
+    attempt_no: int | None = None,
+) -> int:
+    """Append the plan + verdict to `dq.fix_attempts` and return the attempt number."""
+    number = attempt_no
+    if number is None:
+        number = next_attempt_number(engine, plan.incident_id)
+    return persist_attempt_payload(
+        engine,
+        incident_id=plan.incident_id,
+        attempt_no=number,
+        plan=plan,
+        result=result,
+    )
 
 
 def verify_fix(

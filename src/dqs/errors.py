@@ -65,5 +65,9 @@ class FixPlanError(DqsError):
     """A fix plan violated the allowlist, relevance rule, size limit, or exact match."""
 
 
+class FixerError(DqsError):
+    """The fixer could not build its context or produce a valid FixPlan."""
+
+
 class SandboxError(DqsError):
     """The sandbox could not be prepared, built, or cleaned up."""
