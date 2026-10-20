@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     max_fix_attempts: int = 3
     max_tokens_per_incident: int = 60000
     incident_timeout_seconds: int = 300
+    # Sandbox verification is a dbt build over a clone of the project; a hang
+    # must end in a verdict, not an orphaned process or schema.
+    fix_verify_timeout_seconds: int = 300
     dqs_seed: int = 42
 
     # Transient provider failures: retry only HTTP 429/5xx (AGENTS.md §7.7).

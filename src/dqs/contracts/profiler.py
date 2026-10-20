@@ -492,7 +492,14 @@ def profile_table_state(engine: Engine, ref: StagedTableRef) -> TableProfile:
     straight from the Postgres column types.
     """
     allowed_schemas = {schema for _layer, schema in STAGED_SCHEMAS}
-    if ref.schema_name not in allowed_schemas:
+    # Fix verification builds the same dbt models into throwaway sandbox
+    # schemas (`dqs_sandbox_<id>_staging` / `_marts`). Those are steward-owned
+    # by construction and use the same typed-column semantics, so profiling
+    # them is safe; anything else remains rejected.
+    is_sandbox = ref.schema_name.startswith("dqs_sandbox_") and bool(
+        IDENTIFIER_RE.match(ref.schema_name)
+    )
+    if ref.schema_name not in allowed_schemas and not is_sandbox:
         raise ValueError(f"schema {ref.schema_name!r} is not a steward-owned staged schema")
     schema = ref.schema_name
     table = _validated(ref.table)
