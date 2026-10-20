@@ -27,7 +27,8 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from email.utils import parsedate_to_datetime
-from typing import Any, Final, cast
+from enum import Enum
+from typing import Any, Final, Literal, cast, get_args, get_origin
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -372,6 +373,7 @@ class LLMClient:
         retry_base_seconds: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
         on_retry: Callable[[RetryRecord], None] | None = None,
+        on_call: Callable[[LLMCallRecord, Any, Any], None] | None = None,
         secret_values: Sequence[str] | None = None,
     ) -> None:
         self.chat = chat
@@ -383,6 +385,7 @@ class LLMClient:
         self.retry_base_seconds = max(0.0, float(retry_base_seconds))
         self._sleep = sleep
         self.on_retry = on_retry
+        self.on_call = on_call
         self._secret_values = list(secret_values) if secret_values is not None else None
         self.calls: list[LLMCallRecord] = []
 
@@ -423,17 +426,24 @@ class LLMClient:
             return self._secret_values
         return settings_secrets(load_settings())
 
-    def _record_failure(self, started: float, error: str, retries: int) -> None:
+    def _notify_call(self, record: LLMCallRecord, response: Any, messages: Any) -> None:
+        if self.on_call is None:
+            return
+        try:
+            self.on_call(record, response, messages)
+        except Exception as exc:  # observability must not break the call
+            logger.warning("llm call step-log hook failed: %s", exc)
+
+    def _record_failure(self, started: float, error: str, retries: int, messages: Any) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        self.calls.append(
-            LLMCallRecord(
-                provider=self.provider,
-                model=self.model,
-                latency_ms=latency_ms,
-                retries=retries,
-                error=error,
-            )
+        record = LLMCallRecord(
+            provider=self.provider,
+            model=self.model,
+            latency_ms=latency_ms,
+            retries=retries,
+            error=error,
         )
+        self.calls.append(record)
         logger.warning(
             "llm call failed provider=%s model=%s latency_ms=%s retries=%s error=%s",
             self.provider,
@@ -442,6 +452,7 @@ class LLMClient:
             retries,
             error,
         )
+        self._notify_call(record, None, messages)
 
     def _run(self, runnable: Runnable[Any, Any], messages: Any, **kwargs: Any) -> Any:
         started = time.perf_counter()
@@ -459,7 +470,7 @@ class LLMClient:
                     or status not in RETRYABLE_STATUS_CODES
                     or retries >= self.max_retries
                 ):
-                    self._record_failure(started, error, retries)
+                    self._record_failure(started, error, retries, messages)
                     raise
                 backoff = self.retry_base_seconds * (2**retries)
                 requested = retry_after_seconds(exc)
@@ -469,7 +480,7 @@ class LLMClient:
                         f"retry not attempted: waiting {delay:.1f}s would exceed the "
                         f"{self.max_retry_wait_seconds:.1f}s total retry budget"
                     )
-                    self._record_failure(started, f"{error} ({reason})", retries)
+                    self._record_failure(started, f"{error} ({reason})", retries, messages)
                     raise
                 retries += 1
                 total_wait += delay
@@ -514,6 +525,9 @@ class LLMClient:
             retries=retries,
         )
         self.calls.append(record)
+        # Log before enforcing the token budget: the call that exceeds the
+        # budget is still part of the timeline (and its cost must be visible).
+        self._notify_call(record, response, messages)
         if self.budget is not None:
             self.budget.record_llm_call(record)
         logger.debug(
@@ -625,7 +639,12 @@ def get_llm(provider: str, model: str, *, settings: Settings | None = None) -> B
 
 def _example_value(annotation: Any) -> Any:
     """A deterministic, schema-valid example used by the fake model only."""
-    origin = getattr(annotation, "__origin__", None)
+    origin = get_origin(annotation)
+    if origin is Literal:
+        values = get_args(annotation)
+        return values[0] if values else "example"
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return next(iter(annotation)).value
     if annotation is str:
         return "example"
     if annotation is bool:
@@ -634,7 +653,9 @@ def _example_value(annotation: Any) -> Any:
         return 1
     if annotation is float:
         return 0.9
-    if origin in (list, tuple):
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _example_args(annotation)
+    if origin in (list, tuple, set, frozenset):
         return []
     if origin is dict:
         return {}

@@ -279,6 +279,23 @@ def save_impact(engine: Engine, incident_id: uuid.UUID, impact: dict[str, Any]) 
         )
 
 
+def save_root_cause(engine: Engine, incident_id: uuid.UUID, root_cause: dict[str, Any]) -> None:
+    """Persist a RootCause (already serialized) into `dq.incidents.root_cause`.
+
+    Only the investigator's structured output is stored; the incident status is
+    left alone because lifecycle transitions belong to the workflow (Phase 6).
+    """
+    now = dt.datetime.now(dt.UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE dq.incidents SET root_cause = CAST(:r AS jsonb), updated_at = :now "
+                "WHERE incident_id = :id"
+            ),
+            {"r": json.dumps(root_cause), "now": now, "id": incident_id},
+        )
+
+
 def _row_to_incident(row: Row[Any]) -> Incident:
     (
         incident_id,

@@ -16,6 +16,7 @@ non-zero so scripts/CI can rely on it.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -30,7 +31,10 @@ from dqs import dbt_run
 from dqs import dev as devmod
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
+from dqs.agents.investigator import NODE_NAME, investigate
+from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.smoke import run_smoke
+from dqs.agents.steps import DbStepSink
 from dqs.checks.engine import CheckEngine
 from dqs.config import load_settings
 from dqs.contracts import generation as contracts_generation
@@ -43,6 +47,7 @@ from dqs.models.faults import FaultSpec
 from dqs.models.violation import Violation
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
+from dqs.tools.base import ToolContext
 
 app = typer.Typer(name="dqs", help="Agentic data-quality steward for batch pipelines.")
 db_app = typer.Typer(help="Warehouse bootstrap commands (roles, schemas, dq tables).")
@@ -53,6 +58,7 @@ contracts_app = typer.Typer(help="Data contract generation and approval (§7).")
 check_app = typer.Typer(help="Run the deterministic check engine by hand (§7.3).")
 monitor_app = typer.Typer(help="The batch monitor: run checks and record incidents (§8).")
 incidents_app = typer.Typer(help="Inspect recorded incidents.")
+incident_app = typer.Typer(help="Run one incident workflow node by hand (Phase 4+).")
 llm_app = typer.Typer(help="LLM provider checks (Phase 4).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
@@ -62,6 +68,7 @@ app.add_typer(contracts_app, name="contracts")
 app.add_typer(check_app, name="check")
 app.add_typer(monitor_app, name="monitor")
 app.add_typer(incidents_app, name="incidents")
+app.add_typer(incident_app, name="incident")
 app.add_typer(llm_app, name="llm")
 
 console = Console()
@@ -431,6 +438,65 @@ def llm_smoke(
         console.print("[red]one or more probes failed[/red]")
         raise typer.Exit(1)
     console.print("[green]ok[/green] all four probes passed")
+
+
+@incident_app.command("investigate")
+def incident_investigate(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+    provider: str | None = typer.Option(None, help="Provider override (default: LLM_PROVIDER)."),
+    model: str | None = typer.Option(None, help="Model override (default: LLM_MODEL)."),
+) -> None:
+    """Run only the investigate node, persist its RootCause and print the timeline (§10.3)."""
+    try:
+        identifier = uuid.UUID(incident_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    context: ToolContext | None = None
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+        if incident is None:
+            _fail(DqsError(f"no incident with id {incident_id}"))
+        chosen_provider = provider or settings.llm_provider
+        chosen_model = model or settings.llm_model
+        budget = BudgetTracker.from_settings(settings)
+        client = LLMClient.from_provider(
+            chosen_provider, chosen_model, settings=settings, budget=budget
+        )
+        context = ToolContext.from_settings(settings)
+        sink = DbStepSink(engine, node=NODE_NAME, incident_id=identifier, settings=settings)
+        result = investigate(incident, client=client, context=context, sink=sink, budget=budget)
+        incidents_mod.save_root_cause(engine, identifier, result.root_cause.model_dump(mode="json"))
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        if context is not None:
+            context.close()
+        engine.dispose()
+
+    console.print_json(data=result.root_cause.model_dump(mode="json"))
+    console.print(
+        f"provider={chosen_provider} model={chosen_model} channel={result.final_channel} "
+        f"tool_calls={result.tool_calls} tokens={result.tokens} retries={result.retries} "
+        f"budget_exceeded={result.budget_exceeded}"
+    )
+    console.print(f"steps={len(result.steps)} (timeline below; persisted in dq.agent_steps)")
+    table = Table(show_header=True, header_style="bold")
+    for column in ("seq", "kind", "name", "tokens_in", "tokens_out", "latency_ms", "output"):
+        table.add_column(column)
+    for step in result.steps:
+        preview = json.dumps(step.output, ensure_ascii=False, sort_keys=True)[:120]
+        table.add_row(
+            str(step.seq),
+            step.kind,
+            step.name,
+            str(step.tokens_in),
+            str(step.tokens_out),
+            str(step.latency_ms),
+            preview,
+        )
+    console.print(table)
 
 
 @app.command("impact")

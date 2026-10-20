@@ -41,6 +41,10 @@ class LLMError(DqsError):
     """The LLM provider is unavailable, misconfigured, or returned unusable output."""
 
 
+class InvestigatorError(DqsError):
+    """The investigator could not run or could not produce a valid RootCause."""
+
+
 class BudgetExceeded(DqsError):
     """An incident investigation exceeded a hard budget (calls, tokens, or time)."""
 

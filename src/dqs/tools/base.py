@@ -216,8 +216,7 @@ class ToolContext:
                 role = str(conn.execute(text("SELECT current_user")).scalar_one())
         except (SQLAlchemyError, AttributeError) as exc:
             raise ToolError(
-                "ToolContext needs a reachable read-only database engine; "
-                f"role check failed: {exc}"
+                f"ToolContext needs a reachable read-only database engine; role check failed: {exc}"
             ) from exc
         if role != READONLY_ROLE:
             raise ToolError(
