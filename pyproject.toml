@@ -73,6 +73,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+pythonpath = ["."]
 markers = [
     "integration: needs Docker Postgres (dqs dev up first)",
     "llm: needs RUN_LLM_TESTS=1 and an API key (skipped otherwise)",

@@ -578,3 +578,9 @@ entry each; newest last.
     verdict) are written to `out/phase-5b-llm-*.json`. A provider quota error
     is recorded as a failed attempt; reruns after quota recovery use the same
     scenario and do not change prompts or expected outcomes.
+99. **The pytest config puts the repo root on `sys.path`
+    (`pythonpath = ["."]`).** Without it, the bare `pytest` entry point did not
+    make the repository root importable, so `tests.helpers.oracle` failed in
+    `test_fixer_llm.py` and `test_oracle.py`. `python -m pytest` happened to add
+    the working directory, which is why the two invocations differed. The
+    config makes both behave the same; test imports are unchanged.
