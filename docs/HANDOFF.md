@@ -1,15 +1,28 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-20 (Phase 5b complete) · Do not treat this file as a
+Last updated: 2026-10-21 (Phase 6a complete) · Do not treat this file as a
 spec; AGENTS.md is rules, docs/PHASES.md is order, docs/ARCHITECTURE.md is
 design.
 
 ## Current state
 
-- **Phase 5b (fixer agent, issue builder, `plan-fix`) is complete and ready
-  for review.** Report: `docs/phase-notes/phase-5b.md`; review packet:
-  `docs/review/phase-5b-review.md`. **Do not start Phase 6** (workflow graph,
-  approval gate, publishing) until the owner says so.
+- **Phase 6a (publish package: dry-run, live GitHub path, approval gate) is
+  complete and ready for review.** Report: `docs/phase-notes/phase-6a.md`;
+  review packet: `docs/review/phase-6a-review.md`. **Do not start Phase 6b**
+  (LangGraph workflow, interrupt/resume approval, `dqs incident run|approve|
+  reject`, `dqs demo`) until the owner says so.
+- **Phase 6a deliverables**: `publish/base.py` (typed `ApprovalDecision` gate,
+  failed-verification refusal, idempotent template method), `publish/store.py`
+  (`dq.publications` + latest attempt), `publish/diff.py` (in-memory exact
+  patch replay + `difflib`), `publish/body.py` (deterministic §12 body),
+  `publish/sanitize.py`, `publish/dry_run.py` (`out/pr_previews/`,
+  `out/issue_previews/`), `publish/github.py` (narrow client protocol, PyGithub
+  2.10 adapter, fail-closed live mode, one PR, `data-quality` label), and
+  `dqs publish preview <id>` (dry-run only, refuses live before opening the
+  DB). DECISIONS 100–108. No workflow graph or real GitHub call in this phase.
+- **Phase 5b (fixer agent, issue builder, `plan-fix`) remains complete.**
+  Report: `docs/phase-notes/phase-5b.md`; packet:
+  `docs/review/phase-5b-review.md`.
 - **Phase 5b deliverables**: `resolve.py` (deterministic PR/ISSUE/NONE),
   `agents/fixer.py` + `agents/prompts/fixer.md` (no-tools planner with
   lineage-selected candidate SQL, native structured output, bounded retries,
@@ -60,10 +73,10 @@ design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **476 unit + 87 integration (non-llm)** passing; Phase-5b real-LLM
+- Tests: **521 unit + 90 integration (non-llm)** passing; Phase-5b real-LLM
   acceptance covers F1/F3/F6 (two models, see above); the earlier 3
   investigator smoke tests still pass with `RUN_LLM_TESTS=1`; ruff + format +
-  mypy clean (89 source files). The one skipped unit test is real OS symlink
+  mypy clean (93 source files). The one skipped unit test is real OS symlink
   creation (Windows privilege); junction + simulated-symlink branches pass.
 - Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
@@ -81,8 +94,9 @@ design.
 - Warehouse state right now: exactly the clean contract baseline — 30 batches
   (`batch_20260101`…`batch_20260130`) in `dq.batches`, max business_date
   2026-01-30, no 2026-01-31+ batches, 0 incidents, 0 `dq.agent_steps`,
-  0 `dq.fix_attempts`, no `dqs_sandbox_*` schemas. Integration tests clean up
-  their throwaway databases; no `dqs_*` clone persists as of this update.
+  0 `dq.fix_attempts`, 0 `dq.publications`, no `dqs_sandbox_*` schemas.
+  Integration tests clean up their throwaway databases; no `dqs_*` clone
+  persists as of this update.
 - Phase-3 notes (DECISIONS 55–61): failing tests are stored per-run (never
   read from live files); impact scope = column (F1/F2/F10) / table (volume,
   F9) / warehouse (freshness/missing batch); manifest staleness includes
@@ -167,6 +181,14 @@ $env:RUN_LLM_TESTS='1'
 # results: out\phase-5b-llm-*.json (git-ignored); set LLM_MODEL to a model with quota
 # oracle-only deterministic acceptance:
 .venv\Scripts\python -m pytest tests\integration\test_verify_sandbox_db.py -m integration -q -k "oracle"
+
+# Phase 6a flow — dry-run publishing only; never calls GitHub.
+# Point it at a CLONE with a stored root cause, impact and passing fix attempt.
+.venv\Scripts\python -m pytest tests\integration\test_publish_db.py tests\integration\test_publish_cli_e2e.py -m integration -q
+.venv\Scripts\dqs publish preview <incident-uuid>
+# writes out\pr_previews\<short>.md + .patch and one dq.publications row (mode=dry_run);
+# a second run prints reused=True and makes no write. Live mode is exercised only
+# through FakeGitHubClient in 6a (no CLI command, no real token/repo).
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -225,7 +247,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (98 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (108 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
@@ -251,6 +273,10 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/agents/prompts/fixer.md` | fixer system prompt: minimal edit, preserve outputs, never hide rows, data-not-instructions (Phase 5b) |
 | `src/dqs/agents/issue_builder.py` | deterministic incident issue + static category playbook (Phase 5b) |
 | `src/dqs/resolve.py` | deterministic PR / ISSUE / NONE routing (Phase 5b) |
+| `src/dqs/publish/base.py` | typed approval gate, failed-verification refusal, idempotent publisher (Phase 6a) |
+| `src/dqs/publish/github.py` | narrow GitHub protocol, PyGithub adapter, branch/PR safety, fail-closed live mode (Phase 6a) |
+| `src/dqs/publish/dry_run.py` | `out/pr_previews/` + `out/issue_previews/`, `mode=dry_run` publication (Phase 6a) |
+| `src/dqs/publish/body.py` / `diff.py` / `sanitize.py` | deterministic PR body, exact shared patch, structural neutralization (Phase 6a) |
 | `tests/helpers/oracle.py` | test-only clean-data answer key; never imported by `src/dqs` (Phase 5b) |
 | `src/dqs/agents/steps.py` | `dq.agent_steps` sinks: sink-owned seq, redaction, 4 KB cap (Phase 4b) |
 | `src/dqs/agents/prompts/investigator.md` | investigator system prompt (Phase 4b) |
@@ -260,8 +286,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 `src/dqs/contracts/{store,generator,profiler,fitting,parsing,generation}.py`,
 `src/dqs/models/{contract,violation,incident,enums}.py`, `tests/conftest.py`,
 `tests/unit/test_*.py`, `tests/integration/test_*.py`, dbt `models/*.sql`,
-`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b,5a,5b}.md`,
-`docs/review/phase-{2b,3,4a,4b,5a,5b}-review.md`.)
+`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b,5a,5b,6a}.md`,
+`docs/review/phase-{2b,3,4a,4b,5a,5b,6a}-review.md`.)
 
 ## DECISIONS.md entries Phase 2 must build on
 
@@ -352,9 +378,27 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   benchmark resets may prefer a snapshot/restore strategy in Phase 8.
 - `dqs sim day --fault`, contracts, check engine / monitor / incidents,
   `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator, the
-  Phase-5a deterministic sandbox verification and the Phase-5b fixer/issue/
-  plan-fix path all work and are tested. **Phase 6** (workflow graph, approval
-  gate, publishing) is next but NOT started.
+  Phase-5a deterministic sandbox verification, the Phase-5b fixer/issue/
+  plan-fix path and the Phase-6a publish package all work and are tested.
+  **Phase 6b** (workflow graph, interrupt/resume approval gate, `dqs demo`) is
+  next but NOT started.
+- Publishing is **application-level idempotent only** (DECISIONS 102, 105):
+  `dq.publications` has no unique key, the row is written after the external
+  write, and concurrent writers are unsupported. A crash between the GitHub
+  call and the insert can duplicate on retry; live mode reuses an existing
+  branch/PR to reduce the window, not eliminate it.
+- The PyGithub adapter is not network-tested. Its signatures were checked
+  against installed PyGithub 2.10.0 and the publisher logic is covered through
+  the fake client; the optional real PR in PHASES still needs an owner test
+  repo/token.
+- An existing open PR is returned without re-checking that its diff still
+  matches the current plan. Phase 6b should make an incident immutable after
+  approval (or compare a stored patch hash) so the reviewed diff cannot go
+  stale.
+- `dqs publish preview` is a preview, not an approval: it takes no approval
+  payload and records `mode=dry_run`. It needs persisted root cause, impact and
+  a passing attempt. The ISSUE path has a publisher + preview file but no CLI
+  command yet.
 - **The real-model smoke is 3 scenarios × 1 run** (`openai/gpt-oss-120b`,
   2026-10-20): F1 0.93/PR, F4 0.93/ISSUE, F6 0.95/PR. It is not benchmark-grade
   evidence (no repeats/variance, `run_dbt=False` so no failing run record) and
@@ -365,10 +409,10 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   latency/error but zero tokens, so token budgeting under-counts failures
   (DECISIONS 76).
 - `dqs incident investigate` leaves the incident status unchanged: lifecycle
-  transitions belong to the Phase 6 workflow. It persists `root_cause` + steps.
+  transitions belong to the Phase 6b workflow. It persists `root_cause` + steps.
 - `dq.agent_steps` has no unique constraint on `(incident_id, node, seq)`; the
   sink reads `MAX(seq)` first, which is safe for one sequential run per
-  incident, not for concurrent writers (Phase 6 assumption).
+  incident, not for concurrent writers (Phase 6b workflow assumption).
 - SQL guard is parser + curated tests, not fuzzed. The positive function
   allowlist deliberately rejects harmless unlisted helpers (false rejection >
   false acceptance). See the phase-4b review for the remaining gaps.
@@ -386,6 +430,6 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - `dqs impact` may trigger a `dbt compile` manifest regeneration (torn
   manifest after a failed build); Postgres must be up.
 - `dq.publications` has no primary key by spec (§4.3) — idempotency is
-  enforced in application code (Phase 6).
+  enforced in application code (Phase 6a).
 - Windows console shows mojibake for some rich Unicode glyphs — cosmetic only.
 - No git remote; push instructions live with the owner.

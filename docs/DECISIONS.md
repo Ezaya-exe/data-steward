@@ -584,3 +584,59 @@ entry each; newest last.
     `test_fixer_llm.py` and `test_oracle.py`. `python -m pytest` happened to add
     the working directory, which is why the two invocations differed. The
     config makes both behave the same; test imports are unchanged.
+
+## Phase 6a — publish package (2026-10-21)
+
+100. **Publishing is gated by a typed `ApprovalDecision` checked at runtime.**
+     `Publisher.create_pr`/`create_issue` require `approver`, a timezone-aware
+     `timestamp`, and `decision="approve"`; a dict or a missing argument is
+     refused before any I/O. `create_pr` additionally refuses unless
+     `VerificationResult.passed` is true. The dry-run CLI preview is **not** a
+     publication decision and therefore takes no approval payload — it still
+     refuses a failed verification and still records `mode=dry_run`
+     (DECISIONS 107).
+101. **Dry-run issues get `out/issue_previews/<short>.md`.** §12 only specifies
+     `out/pr_previews/` for PRs; the issue path mirrors it so a Phase-6b ISSUE
+     route can be previewed without inventing a GitHub call. The issue document
+     is sanitized as a whole (headings/tables preserved, HTML/mentions/refs
+     neutralized, secrets redacted).
+102. **`dq.publications` idempotency lives in application code.** The table has
+     no primary key/unique constraint by spec (§4.3). `PublicationStore.find`
+     returns the newest row for `(incident_id, kind)` and the base publisher
+     returns it before delegating any I/O. The row is inserted only after a
+     successful external write, so a process crash in that narrow window can
+     still allow a duplicate on retry; concurrent writers are unsupported
+     (single-writer assumption, same as `dq.fix_attempts`).
+103. **Diffs are computed in memory against the current model files.** The
+     Phase-5a allowlist and exact-match rules are reused; the real project is
+     read but never written. The same `FilePatch` objects produce the preview
+     `.patch` and the live commit content, so the reviewed patch and the
+     committed change cannot drift. Unified diffs use LF control lines.
+104. **Live GitHub access is a small `GitHubClient` protocol plus a PyGithub
+     2.10.0 adapter.** The fake client in tests records every call, so branch
+     validation, target-branch-only commits, one PR, the label step and
+     idempotency are asserted without a network call. The protocol deliberately
+     has no merge/force/base-branch write method; live mode additionally
+     refuses a branch equal to `GITHUB_BASE_BRANCH`.
+105. **Live mode fails closed.** `GITHUB_MODE=live` requires both a non-empty
+     token and a `owner/repo`-shaped repo; otherwise `build_publisher` raises a
+     clear `PublicationError` before constructing a client. Client construction
+     and every GitHub call are wrapped in an error whose message is redacted by
+     value (`Settings` secrets) and by token shape.
+106. **Sanitization neutralizes structure, not just characters.** Mentions and
+     `#123` refs get a zero-width space (visually identical, not parseable),
+     HTML is escaped, Markdown link boundaries (`](`, brackets) are escaped,
+     secrets are redacted first, and every field/document has a hard character
+     cap. Evidence, diffs and dbt excerpts are fenced and cannot close their
+     fence. The zero-width choice avoids showing literal `&#64;` entities
+     inside code blocks.
+107. **`dqs publish preview <id>` is dry-run only.** It refuses
+     `GITHUB_MODE=live` before opening a DB connection; it requires a stored
+     root cause, impact and at least one `dq.fix_attempts` row; the latest
+     attempt must have a valid plan and a passing verification. It renders
+     through the same `render_pr_body`/`build_file_patches` code and records
+     the row with `mode=dry_run`.
+108. **Live commit messages and PR titles use code-only fields.** Category
+     (closed enum), `raw.<table>` (validated identifier), short incident id and
+     fixed label text only — no model prose enters git history or the title
+     line. The body still carries the sanitized prose.
