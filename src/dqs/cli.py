@@ -10,6 +10,7 @@ added phase by phase — commands are not invented here):
 - `dqs dbt build [--target dev|sandbox]`                                    (Phase 1)
 - `dqs verify <plan.json> | cleanup`                                        (Phase 5a)
 - `dqs incident plan-fix <id>`                                              (Phase 5b)
+- `dqs publish preview <id>`                                                (Phase 6a, dry-run only)
 
 Errors from the layer below are caught and printed; the process exit code is
 non-zero so scripts/CI can rely on it.
@@ -52,6 +53,8 @@ from dqs.models.fix import FixPlan
 from dqs.models.impact import ImpactReport
 from dqs.models.root_cause import RootCause
 from dqs.models.violation import Violation
+from dqs.publish.dry_run import preview_paths, run_dry_run
+from dqs.publish.store import DbPublicationStore, load_latest_fix_attempt
 from dqs.resolve import plan_resolution
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
@@ -69,6 +72,7 @@ monitor_app = typer.Typer(help="The batch monitor: run checks and record inciden
 incidents_app = typer.Typer(help="Inspect recorded incidents.")
 incident_app = typer.Typer(help="Run one incident workflow node by hand (Phase 4+).")
 llm_app = typer.Typer(help="LLM provider checks (Phase 4).")
+publish_app = typer.Typer(help="Preview verified fixes locally (dry-run only, no GitHub call).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
@@ -79,6 +83,7 @@ app.add_typer(monitor_app, name="monitor")
 app.add_typer(incidents_app, name="incidents")
 app.add_typer(incident_app, name="incident")
 app.add_typer(llm_app, name="llm")
+app.add_typer(publish_app, name="publish")
 
 console = Console()
 
@@ -635,6 +640,76 @@ def incident_plan_fix(
         f"[green]PASS[/green] fix verified in attempt {result.attempts[-1].attempt_no}; "
         "plan and attempt are persisted"
     )
+
+
+@publish_app.command("preview")
+def publish_preview(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+) -> None:
+    """Write a dry-run PR preview from persisted root cause, fix attempt and impact.
+
+    This command is deliberately dry-run only: it refuses `GITHUB_MODE=live`
+    before opening a database connection, and it never constructs a GitHub
+    client. The preview is recorded in `dq.publications` with `mode=dry_run`.
+    """
+    try:
+        identifier = uuid.UUID(incident_id)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+    settings = load_settings()
+    if settings.github_mode != "dry_run":
+        _fail(
+            DqsError(
+                "dqs publish preview refuses GITHUB_MODE=live: this command only writes "
+                "a local preview and never calls GitHub"
+            )
+        )
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+        if incident is None:
+            _fail(DqsError(f"no incident with id {incident_id}"))
+        if incident.root_cause is None:
+            _fail(
+                DqsError(f"incident {incident_id} has no stored root cause; run investigate first")
+            )
+        if incident.impact is None:
+            _fail(DqsError(f"incident {incident_id} has no stored impact report; run impact first"))
+        try:
+            # Validate the stored artifacts now; the body renders honest
+            # "not recorded" text for absent data, but a preview built on
+            # corrupt JSON would be misleading.
+            RootCause.model_validate(incident.root_cause)
+            ImpactReport.model_validate(incident.impact)
+        except ValidationError as exc:
+            _fail(DqsError(f"stored incident artifacts do not validate:\n{exc}"))
+
+        loaded = load_latest_fix_attempt(engine, identifier)
+        if loaded is None:
+            _fail(
+                DqsError(f"incident {incident_id} has no fix attempts; run incident plan-fix first")
+            )
+        plan, verification = loaded
+        result = run_dry_run(
+            plan,
+            incident,
+            verification,
+            store=DbPublicationStore(engine),
+            settings=settings,
+        )
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+
+    md_path, patch_path = preview_paths(identifier)
+    console.print(
+        f"mode={result.mode.value} kind={result.kind.value} reused={result.reused}",
+        markup=False,
+    )
+    console.print(f"PR body: {md_path}", markup=False)
+    console.print(f"Patch:   {patch_path}", markup=False)
+    console.print(f"URL:     {result.url}", markup=False)
 
 
 @app.command("impact")
