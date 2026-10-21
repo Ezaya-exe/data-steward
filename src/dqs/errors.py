@@ -75,3 +75,7 @@ class IssueBuildError(DqsError):
 
 class SandboxError(DqsError):
     """The sandbox could not be prepared, built, or cleaned up."""
+
+
+class PublicationError(DqsError):
+    """A publication was refused, misconfigured, or failed at the GitHub boundary."""
