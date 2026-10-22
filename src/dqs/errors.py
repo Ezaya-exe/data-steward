@@ -79,3 +79,7 @@ class SandboxError(DqsError):
 
 class PublicationError(DqsError):
     """A publication was refused, misconfigured, or failed at the GitHub boundary."""
+
+
+class WorkflowError(DqsError):
+    """The incident workflow is misconfigured or cannot continue from its checkpoint."""

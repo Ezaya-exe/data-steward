@@ -116,6 +116,24 @@ class FixAttempt(BaseModel):
     final_channel: str
 
 
+class PlanAttempt(BaseModel):
+    """One planner round trip, before the deterministic verifier runs.
+
+    The LangGraph workflow separates `plan_fix` from `verify_fix`; an invalid
+    draft that never reaches dbt still needs a typed failed result so the graph
+    can retry and the issue can report it honestly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_no: int
+    plan: FixPlan | None = None
+    failed: VerificationResult | None = None
+    error: str | None = None
+    final_channel: str = "invalid"
+    budget_exceeded: bool = False
+
+
 class PlanFixResult(BaseModel):
     """The complete outcome of the bounded retry loop."""
 
@@ -379,6 +397,186 @@ def _rejected_result(criterion: str, detail: str) -> VerificationResult:
     )
 
 
+def plan_attempt(
+    incident: Incident,
+    root_cause: RootCause,
+    impact: ImpactReport,
+    *,
+    client: LLMClient,
+    sink: StepSink,
+    settings: Settings,
+    attempt_no: int,
+    previous: tuple[int, VerificationResult] | None,
+    candidates: Sequence[CandidateModel],
+    engine: Engine | None = None,
+    persister: Persister | None = None,
+    prompt: str | None = None,
+) -> PlanAttempt:
+    """Ask the model for ONE fix draft and validate it into a `FixPlan`.
+
+    This is the planner half of the workflow edge `plan_fix -> verify_fix`.
+    Nothing here runs SQL or touches a file: the only side effects are the step
+    log and (for a rejected draft) a `dq.fix_attempts` row. A budget failure is
+    returned as a typed outcome rather than raised, so the graph can turn it
+    into an issue with the partial findings.
+    """
+    system_prompt = prompt or load_prompt()
+    client.on_retry = _retry_step_hook(sink)
+    client.on_call = _llm_step_hook(sink)
+
+    if client.budget is not None:
+        try:
+            client.budget.check()
+        except BudgetExceeded as exc:
+            sink.record(
+                kind="system",
+                name="budget_exhausted",
+                input={"attempt_no": attempt_no},
+                output={"phase": "fixer", "error": str(exc)},
+            )
+            return PlanAttempt(attempt_no=attempt_no, error=str(exc), budget_exceeded=True)
+
+    sink.record(
+        kind="system",
+        name="fix_attempt_start",
+        input={"attempt_no": attempt_no, "has_feedback": previous is not None},
+        output={},
+    )
+    messages: list[Any] = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(
+            content=build_fix_context(
+                root_cause,
+                impact,
+                candidates,
+                previous=previous,
+                settings=settings,
+            )
+        ),
+    ]
+    started = time.perf_counter()
+    try:
+        draft = _ask_fixer(client, messages)
+    except BudgetExceeded as exc:
+        sink.record(
+            kind="system",
+            name="budget_exhausted",
+            input={"attempt_no": attempt_no},
+            output={"phase": "fixer", "error": str(exc)},
+        )
+        return PlanAttempt(attempt_no=attempt_no, error=str(exc), budget_exceeded=True)
+    except Exception as exc:
+        detail = (
+            "the model did not return a schema-valid fix plan: "
+            f"{type(exc).__name__}: {str(exc)[:MAX_DETAIL_CHARS]}"
+        )
+        failed = _rejected_result("fixer_output", detail)
+        if engine is not None or persister is not None:
+            (persister or _default_persist)(
+                engine,
+                incident.incident_id,
+                attempt_no,
+                {"incident_id": str(incident.incident_id), "error": detail},
+                failed,
+            )
+        sink.record(
+            kind="system",
+            name="fix_attempt_result",
+            input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
+            output={"passed": False, "failed_criteria": failed.failed_criteria},
+        )
+        return PlanAttempt(
+            attempt_no=attempt_no,
+            failed=failed,
+            error=detail,
+            final_channel="invalid",
+        )
+
+    try:
+        plan = build_fix_plan(draft, incident, root_cause)
+    except ValidationError as exc:
+        detail = f"the draft could not become a FixPlan: {exc}"
+        failed = _rejected_result("plan_validation", detail)
+        if engine is not None or persister is not None:
+            (persister or _default_persist)(
+                engine,
+                incident.incident_id,
+                attempt_no,
+                {
+                    "incident_id": str(incident.incident_id),
+                    "draft": draft.model_dump(mode="json"),
+                    "error": detail,
+                },
+                failed,
+            )
+        sink.record(
+            kind="system",
+            name="fix_attempt_result",
+            input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
+            output={"passed": False, "failed_criteria": failed.failed_criteria},
+        )
+        return PlanAttempt(
+            attempt_no=attempt_no,
+            failed=failed,
+            error=detail,
+            final_channel="invalid",
+        )
+
+    return PlanAttempt(
+        attempt_no=attempt_no,
+        plan=plan,
+        final_channel="native_structured",
+    )
+
+
+def verify_attempt(
+    planned: PlanAttempt,
+    *,
+    incident: Incident,
+    settings: Settings,
+    engine: Engine | None = None,
+    verifier: Verifier | None = None,
+    persister: Persister | None = None,
+    sink: StepSink | None = None,
+) -> FixAttempt:
+    """Verify one planned fix (or turn an invalid draft into a failed attempt)."""
+    if planned.plan is None:
+        failed = planned.failed or _rejected_result(
+            "planning", planned.error or "no valid plan was produced"
+        )
+        return FixAttempt(
+            attempt_no=planned.attempt_no,
+            plan=None,
+            verification=failed,
+            final_channel=planned.final_channel,
+        )
+
+    verify = verifier or sandbox_module.verify_fix
+    started = time.perf_counter()
+    result = verify(settings, planned.plan, engine=engine, persist=False)
+    if engine is not None or persister is not None:
+        (persister or _default_persist)(
+            engine, incident.incident_id, planned.attempt_no, planned.plan, result
+        )
+    if sink is not None:
+        sink.record(
+            kind="system",
+            name="fix_attempt_result",
+            input={"attempt_no": planned.attempt_no, "latency_ms": _elapsed_ms(started)},
+            output={
+                "passed": result.passed,
+                "failed_criteria": result.failed_criteria,
+                "dbt_exit_code": result.dbt_exit_code,
+            },
+        )
+    return FixAttempt(
+        attempt_no=planned.attempt_no,
+        plan=planned.plan,
+        verification=result,
+        final_channel=planned.final_channel,
+    )
+
+
 def plan_fix(
     incident: Incident,
     root_cause: RootCause,
@@ -397,7 +595,11 @@ def plan_fix(
     first_attempt_no: int | None = None,
     prompt: str | None = None,
 ) -> PlanFixResult:
-    """Run the bounded fixer → verifier loop for one incident.
+    """Run the bounded fixer → verifier loop for one incident (CLI path).
+
+    The LangGraph workflow uses `plan_attempt` + `verify_attempt` directly so
+    it can checkpoint between the two; this wrapper keeps the Phase-5b
+    `dqs incident plan-fix` command working with identical stored history.
 
     Returns a result carrying every attempt. Exhaustion is a normal outcome
     (`passed=False`, `exhausted=True`), not an exception: the workflow needs the
@@ -420,7 +622,6 @@ def plan_fix(
             f"no staging model directly selects from {table}; there is no file a fix could edit"
         )
 
-    verify = verifier or sandbox_module.verify_fix
     persist = persister or _default_persist
     if first_attempt_no is not None:
         start = first_attempt_no
@@ -466,131 +667,36 @@ def plan_fix(
         )
 
     for attempt_no in range(start, start + limit):
-        sink.record(
-            kind="system",
-            name="fix_attempt_start",
-            input={
-                "attempt_no": attempt_no,
-                "has_feedback": previous is not None,
-            },
-            output={},
+        planned = plan_attempt(
+            incident,
+            root_cause,
+            impact,
+            client=client,
+            sink=sink,
+            settings=settings,
+            attempt_no=attempt_no,
+            previous=previous,
+            candidates=selected,
+            engine=engine,
+            persister=persist,
+            prompt=system_prompt,
         )
-        messages: list[Any] = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(
-                content=build_fix_context(
-                    root_cause,
-                    impact,
-                    selected,
-                    previous=previous,
-                    settings=settings,
-                )
-            ),
-        ]
-        started = time.perf_counter()
-        try:
-            draft = _ask_fixer(client, messages)
-        except BudgetExceeded:
+        if planned.budget_exceeded:
             budget_exceeded = True
-            sink.record(
-                kind="system",
-                name="budget_exhausted",
-                input={"attempt_no": attempt_no},
-                output={"phase": "fixer"},
-            )
             break
-        except Exception as exc:
-            detail = (
-                "the model did not return a schema-valid fix plan: "
-                f"{type(exc).__name__}: {str(exc)[:MAX_DETAIL_CHARS]}"
-            )
-            failed = _rejected_result("fixer_output", detail)
-            attempts.append(
-                FixAttempt(
-                    attempt_no=attempt_no,
-                    plan=None,
-                    verification=failed,
-                    final_channel="invalid",
-                )
-            )
-            if engine is not None or persister is not None:
-                persist(
-                    engine,
-                    incident.incident_id,
-                    attempt_no,
-                    {
-                        "incident_id": str(incident.incident_id),
-                        "error": detail,
-                    },
-                    failed,
-                )
-            sink.record(
-                kind="system",
-                name="fix_attempt_result",
-                input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
-                output={"passed": False, "failed_criteria": failed.failed_criteria},
-            )
-            previous = (attempt_no, failed)
-            continue
-
-        try:
-            plan = build_fix_plan(draft, incident, root_cause)
-        except ValidationError as exc:
-            detail = f"the draft could not become a FixPlan: {exc}"
-            failed = _rejected_result("plan_validation", detail)
-            attempts.append(
-                FixAttempt(
-                    attempt_no=attempt_no,
-                    plan=None,
-                    verification=failed,
-                    final_channel="invalid",
-                )
-            )
-            if engine is not None or persister is not None:
-                persist(
-                    engine,
-                    incident.incident_id,
-                    attempt_no,
-                    {
-                        "incident_id": str(incident.incident_id),
-                        "draft": draft.model_dump(mode="json"),
-                        "error": detail,
-                    },
-                    failed,
-                )
-            sink.record(
-                kind="system",
-                name="fix_attempt_result",
-                input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
-                output={"passed": False, "failed_criteria": failed.failed_criteria},
-            )
-            previous = (attempt_no, failed)
-            continue
-
-        result = verify(settings, plan, engine=engine, persist=False)
-        if engine is not None or persister is not None:
-            persist(engine, incident.incident_id, attempt_no, plan, result)
-        attempts.append(
-            FixAttempt(
-                attempt_no=attempt_no,
-                plan=plan,
-                verification=result,
-                final_channel="native_structured",
-            )
+        attempt = verify_attempt(
+            planned,
+            incident=incident,
+            settings=settings,
+            engine=engine,
+            verifier=verifier,
+            persister=persist,
+            sink=sink,
         )
-        sink.record(
-            kind="system",
-            name="fix_attempt_result",
-            input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
-            output={
-                "passed": result.passed,
-                "failed_criteria": result.failed_criteria,
-                "dbt_exit_code": result.dbt_exit_code,
-            },
-        )
-        if result.passed:
+        attempts.append(attempt)
+        if attempt.verification.passed:
             return finish(True)
-        previous = (attempt_no, result)
+        previous = (attempt_no, attempt.verification)
 
     return finish(False)
 
@@ -604,11 +710,14 @@ __all__ = [
     "FixAttempt",
     "FixPlanDraft",
     "NODE_NAME",
+    "PlanAttempt",
     "PlanFixResult",
     "build_fix_context",
     "build_fix_plan",
     "candidate_staging_models",
     "load_prompt",
+    "plan_attempt",
     "plan_fix",
     "select_candidates",
+    "verify_attempt",
 ]

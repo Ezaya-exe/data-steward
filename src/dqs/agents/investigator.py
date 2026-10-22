@@ -332,7 +332,7 @@ def investigate(
     incident: Incident,
     *,
     client: LLMClient,
-    context: ToolContext,
+    context: ToolContext | None,
     sink: StepSink,
     budget: BudgetTracker | None = None,
     prompt: str | None = None,
@@ -344,11 +344,20 @@ def investigate(
     answer become `UNKNOWN` + `ISSUE`, never an exception that loses the partial
     findings. Provider/transport failures before any evidence is gathered are
     real errors and raise `InvestigatorError`.
+
+    `context` may be None only when the caller injects an explicit `tools`
+    registry (the workflow tests and a future non-Postgres runner); the default
+    Postgres tool set needs it.
     """
     tracker = budget or client.budget or BudgetTracker.from_settings(load_settings())
     client.budget = tracker
     system_prompt = prompt or load_prompt()
-    registry = tools if tools is not None else build_tools(context)
+    if tools is not None:
+        registry = tools
+    else:
+        if context is None:
+            raise InvestigatorError("investigate needs a ToolContext when no tools are injected")
+        registry = build_tools(context)
     by_name = {tool.name: tool for tool in registry}
 
     called_tools: list[str] = []

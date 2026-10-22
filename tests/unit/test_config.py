@@ -66,7 +66,7 @@ def test_defaults_from_architecture(clean_env: pytest.MonkeyPatch) -> None:
     assert s.max_tool_calls == 10
     assert s.max_fix_attempts == 3
     assert s.max_tokens_per_incident == 60000
-    assert s.incident_timeout_seconds == 300
+    assert s.incident_timeout_seconds == 900
     assert s.dqs_seed == 42
     # secrets are empty, never fabricated
     assert s.anthropic_api_key == ""

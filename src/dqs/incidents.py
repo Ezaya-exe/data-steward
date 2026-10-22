@@ -296,6 +296,60 @@ def save_root_cause(engine: Engine, incident_id: uuid.UUID, root_cause: dict[str
         )
 
 
+def save_resolution(engine: Engine, incident_id: uuid.UUID, resolution: dict[str, Any]) -> None:
+    """Persist the routing decision and its outcome into `dq.incidents.resolution`.
+
+    The column is the workflow's audit trail: which resolution type was chosen,
+    why, and (after publishing) the authentication/URL of the artifact. The
+    status transition timestamp is `updated_at`.
+    """
+    now = dt.datetime.now(dt.UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE dq.incidents SET resolution = "
+                "COALESCE(resolution, '{}'::jsonb) || CAST(:r AS jsonb), updated_at = :now "
+                "WHERE incident_id = :id"
+            ),
+            {"r": json.dumps(resolution), "now": now, "id": incident_id},
+        )
+
+
+def set_status(
+    engine: Engine,
+    incident_id: uuid.UUID,
+    status: IncidentStatus,
+    *,
+    reason: str | None = None,
+) -> None:
+    """Move one incident to `status` and stamp `updated_at`.
+
+    The workflow is the only caller: every node that changes lifecycle state
+    goes through here so the status and its timestamp cannot drift apart. When
+    a reason is supplied it is appended to the resolution JSONB under
+    `status_reason` (serialized as a small object, never free-form SQL).
+    """
+    now = dt.datetime.now(dt.UTC)
+    with engine.begin() as conn:
+        if reason:
+            conn.execute(
+                text(
+                    "UPDATE dq.incidents SET status = :s, "
+                    "resolution = jsonb_set(COALESCE(resolution, '{}'::jsonb), "
+                    "'{status_reason}', to_jsonb(CAST(:r AS text)), true), "
+                    "updated_at = :now WHERE incident_id = :id"
+                ),
+                {"s": status.value, "r": reason, "now": now, "id": incident_id},
+            )
+        else:
+            conn.execute(
+                text(
+                    "UPDATE dq.incidents SET status = :s, updated_at = :now WHERE incident_id = :id"
+                ),
+                {"s": status.value, "now": now, "id": incident_id},
+            )
+
+
 def _row_to_incident(row: Row[Any]) -> Incident:
     (
         incident_id,
