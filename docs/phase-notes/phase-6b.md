@@ -205,8 +205,8 @@ Timeline from `dq.incidents` + `dq.agent_steps` in `dqs_demo`:
 |---|---|
 | Incident | `86a9bc7a-ccbb-4cd0-ade3-b56bdf8b5e2a` (short `86a9bc7a`) |
 | Resolution / status | `PR` / `resolved` |
-| Workflow window | 10:57:26.475Z → 10:59:26.453Z (≈ 120 s) |
-| Steps | 26 (`investigate` 15, `assess_impact`/`plan_resolution` 1 each, `plan_fix` 2, `verify_fix` 2, `approval_gate` 1, `publish` 2) |
+| Incident created → last step | 10:57:26.475Z → 10:59:26.453Z (≈ 120 s) |
+| Steps | 26 (`investigate` 15, `assess_impact`/`plan_resolution` 1 each, `plan_fix` 4, `verify_fix` 2, `approval_gate` 1, `publish` 2) |
 | Tokens | 18,688 input + 2,849 output across 8 LLM calls |
 | Approval | `approve`, `approver=auto`, `auto=true`, 10:59:26.427Z |
 | Publication | one `pr` row, `mode=dry_run`, `status=done`, `reused=False` |
