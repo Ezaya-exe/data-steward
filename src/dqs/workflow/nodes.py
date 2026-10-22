@@ -546,6 +546,22 @@ def publish_node(deps: WorkflowDeps) -> Callable[[WorkflowState], dict[str, Any]
             # The graph cannot route here without an approval; this is a
             # defence-in-depth check before an external write.
             raise WorkflowError("publish ran without an approve decision")
+        # The rendered PR body reads root cause and impact from the Incident
+        # record. The state's Incident was loaded before those artifacts
+        # existed, so reload from the journal and overlay the run's typed
+        # values; otherwise a real PR would claim "no root cause recorded".
+        persisted = deps.journal.get_incident(incident.incident_id)
+        if persisted is not None:
+            incident = persisted
+        overlays: dict[str, Any] = {}
+        root_cause = state.get("root_cause")
+        if root_cause is not None:
+            overlays["root_cause"] = root_cause.model_dump(mode="json")
+        impact = state.get("impact")
+        if impact is not None:
+            overlays["impact"] = impact.model_dump(mode="json")
+        if overlays:
+            incident = incident.model_copy(update=overlays)
         resolution = state.get("resolution_type") or ResolutionType.ISSUE
         sink = deps.sink("publish", incident.incident_id)
         if resolution is ResolutionType.PR:

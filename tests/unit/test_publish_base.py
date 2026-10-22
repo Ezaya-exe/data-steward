@@ -128,6 +128,23 @@ def test_create_pr_writes_once_and_returns_the_stored_row(tmp_path) -> None:
     assert md.read_bytes() == before
 
 
+def test_a_pending_row_is_completed_by_the_next_dry_run_attempt(tmp_path) -> None:
+    """Crash window: begin() wrote the marker but the process died before done.
+
+    The retry must render the artifact again, complete the same row and never
+    create a second publication key.
+    """
+    publisher, store = _publisher(tmp_path)
+    store.begin(INCIDENT_ID, PublicationKind.PR, publisher.mode)
+
+    result = publisher.create_pr(make_plan(), make_incident(), make_verification(), make_approval())
+
+    assert not result.reused
+    assert len(store.rows) == 1
+    assert not store.has_pending(INCIDENT_ID, PublicationKind.PR)
+    assert (tmp_path / f"{INCIDENT_ID.hex[:8]}.md").is_file()
+
+
 def test_create_pr_refuses_a_plan_from_another_incident(tmp_path) -> None:
     publisher, store = _publisher(tmp_path)
     plan = make_plan().model_copy(update={"incident_id": uuid.uuid4()})

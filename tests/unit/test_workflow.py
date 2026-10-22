@@ -346,6 +346,12 @@ def test_pr_path_interrupts_then_publishes_after_approval(tmp_path: Path) -> Non
     assert resumed.status is IncidentStatus.RESOLVED
     assert resumed.publication is not None
     assert len(publisher.pr_calls) == 1
+    published_incident = publisher.pr_calls[0][1]
+    # The PR body renders from the Incident, so the workflow must attach the
+    # artifacts it just persisted; otherwise the PR says "no root cause".
+    assert published_incident.root_cause is not None
+    assert published_incident.root_cause["category"] == "SOURCE_COLUMN_RENAMED"
+    assert published_incident.impact is not None
     assert publisher.pr_calls[0][3].approver == "shravan"
     assert publisher.pr_calls[0][3].auto is False
     statuses = [status for status, _reason, _at in journal.transitions]

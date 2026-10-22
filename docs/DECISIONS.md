@@ -640,3 +640,73 @@ entry each; newest last.
      (closed enum), `raw.<table>` (validated identifier), short incident id and
      fixed label text only — no model prose enters git history or the title
      line. The body still carries the sanitized prose.
+
+## Phase 6b — workflow, approval gate, demo (2026-10-22)
+
+109. **Workflow state is a TypedDict; services are injected, never
+     checkpointed.** `WorkflowState` holds only validated, JSON-safe values
+     (incidents, root cause, impact, plans, verification results, budget
+     snapshot). Engines, LLM clients, publishers and tool contexts live in
+     `WorkflowDeps`, so `data/checkpoints.sqlite` can be resumed in a fresh
+     process without a connection or a secret. A node exception marks the
+     incident failed and keeps the checkpoint that proves where it stopped.
+110. **All nodes share one `BudgetTracker`; exhaustion is a routing outcome,
+     not an exception loop.** `investigate`, `plan_fix` and `verify_fix` report
+     `budget_exceeded`; the graph routes that to `build_issue` with the partial
+     findings. The wall-clock limit (`INCIDENT_TIMEOUT_SECONDS`) is enforced by
+     the same tracker. The default was raised from 300 s to 900 s because a
+     real incident can include an LLM retry plus one or more whole-warehouse
+     sandbox builds (DECISIONS 76 still applies to failed-call tokens).
+111. **The approval gate is a LangGraph `interrupt` with a typed resume
+     payload.** The gate writes `awaiting_approval`, interrupts, and persists
+     only after `Command(resume={"decision", "approver", "note"})` returns.
+     `ApprovalDecision` now models approve *and* reject; a rejection requires a
+     note, auto-approval can only approve, and the publisher still refuses
+     anything but `approve`. Auto-approval is never a default: it requires the
+     explicit `--auto-approve`/`--yes` flag, uses approver `auto`, and is
+     labeled in the rendered artifact.
+112. **Status transitions live in `dq.incidents`; reasons live in
+     `resolution.status_reason`.** There is no new history table. Each
+     transition updates `status`, `updated_at` and a short reason; the
+     `resolution` JSON is merged rather than replaced so a routing reason or an
+     issue title survives approval and publication updates.
+113. **Publication is a pending → done lifecycle with a real unique key.**
+     `sql/003_publication_status.sql` dedupes legacy rows, adds `status` and a
+     unique index on `(incident_id, kind)`. The publisher inserts `pending`
+     before any external call and flips it to `done` after. A retry that sees a
+     pending row looks up the deterministic branch/issue marker, so a crash in
+     the window before `done` cannot create a second artifact. `find` returns
+     completed rows only.
+114. **Diffs and commits use repository-root-relative paths, and live mode
+     checks the base branch.** Patches name
+     `warehouse/dbt_project/models/...`, and the live adapter compares each
+     base-branch target file's blob hash with the local pre-patch content
+     before writing. A mismatch refuses with "push local commits first"
+     instead of committing on top of an unseen base change. The fake-client
+     test and `git apply --check` run from the repository root.
+115. **The demo owns `dqs_demo`, and dbt receives PG* only from
+     `Settings`.** The database is created from `template0` through the
+     `postgres` maintenance connection; `--reset` drops it `WITH (FORCE)`, and
+     a reused demo database has its four schemas reset in place. `dbt_env`
+     allowlists the child environment and overrides ambient `PGDATABASE`, so a
+     demo build cannot fall back to the warehouse. The demo follows
+     `GITHUB_MODE` and is dry-run by default.
+116. **The demo uses the production approval path.** Without `--yes` the CLI
+     prompts with the same artifact summary a human reviewer sees; with
+     `--yes` it sets the workflow's explicit auto-approve flag (approver
+     `auto`, visibly labeled). There is no implicit approval and no separate
+     demo-only publisher.
+117. **`langgraph-checkpoint-sqlite` is pinned to `>=3.1,<4` (3.1.2).** The
+     installed `langgraph-checkpoint` 4.3 removed
+     `JsonPlusSerializer.dumps`, which broke 2.0.10 at runtime. The installed
+     LangGraph 1.2 API was verified directly: `interrupt(value, *,
+     response_schema=...)`, `Command(*, resume=...)`, `SqliteSaver(conn)` and
+     `compiled.get_graph().draw_mermaid()`.
+118. **LangGraph node registration goes through one typed helper.** LangGraph
+     1.2's `StateLike` bound is not accepted for a `TypedDict` by mypy, so
+     `_add_node` carries one commented `# type: ignore[call-overload]`; the
+     runtime contract and every edge are covered by the workflow tests.
+119. **`investigate` takes either a `ToolContext` or an explicit tool
+     registry.** Workflow tests inject scripted read-only tools without a
+     database; production still builds the real context. Supplying neither is
+     an `InvestigatorError` rather than silently running without tools.
