@@ -86,5 +86,26 @@ class FakeGitHubClient:
         )
         return number, url
 
+    def find_issue(self, marker: str) -> tuple[int, str] | None:
+        self._record("find_issue", marker=marker)
+        for issue in self.issues:
+            if marker in (issue["title"] or "") or marker in (issue["body"] or ""):
+                return int(issue["number"]), str(issue["url"])
+        return None
+
+    def seed_base_files(self, plan: Any, base_branch: str = "main") -> None:
+        """Make the fake base branch hold the local pre-patch file contents.
+
+        The live publisher refuses to commit when the remote base differs from
+        the local checkout; tests that expect a successful publish must seed
+        the fake remote with exactly the same content.
+        """
+        from dqs.publish.diff import build_file_patches
+
+        for patch in build_file_patches(plan.edits):
+            self.files[(patch.path, base_branch)] = RemoteFile(
+                text=patch.old_text, sha=f"base-{patch.path}"
+            )
+
     def reset_calls(self) -> None:
         self.calls.clear()

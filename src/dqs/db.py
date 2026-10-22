@@ -34,6 +34,8 @@ INIT_SQL_FILES: Final = (
     "001_init.sql",
     # 002 (Phase 3) is idempotent and adds missing columns to existing DBs too.
     "002_pipeline_run_failures.sql",
+    # 003 (Phase 6b) adds the publication status + uniqueness invariant.
+    "003_publication_status.sql",
 )
 
 

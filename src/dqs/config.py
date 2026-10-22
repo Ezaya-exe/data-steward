@@ -71,7 +71,9 @@ class Settings(BaseSettings):
     max_tool_calls: int = 10
     max_fix_attempts: int = 3
     max_tokens_per_incident: int = 60000
-    incident_timeout_seconds: int = 300
+    # Phase 6b raised the default: a real incident can include an LLM retry
+    # cycle and one or more sandbox dbt builds (each a whole-warehouse build).
+    incident_timeout_seconds: int = 900
     # Sandbox verification is a dbt build over a clone of the project; a hang
     # must end in a verdict, not an orphaned process or schema.
     fix_verify_timeout_seconds: int = 300

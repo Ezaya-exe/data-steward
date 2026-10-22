@@ -185,7 +185,7 @@ def test_body_contains_every_required_section() -> None:
     for section in REQUIRED_SECTIONS:
         assert section in body
     assert REVIEW_FOOTER in body
-    assert "| model | layer | distance | column lineage |" in body
+    assert "| model | layer | distance | direct column lineage |" in body
     assert "weekly_revenue" in body
     assert "analytics@example.com" in body
     assert "0.92" in body
@@ -259,3 +259,60 @@ def test_failed_criteria_are_shown_but_the_renderer_does_not_refuse() -> None:
 
     assert "- **Verdict:** FAIL" in body
     assert "- **Failed criteria:** `dbt_build`" in body
+
+
+def test_approval_state_replaces_the_stale_investigating_status() -> None:
+    from dqs.publish.base import ApprovalDecision
+
+    approval = ApprovalDecision(approver="shravan", timestamp=NOW, decision="approve", auto=True)
+
+    body = render_pr_body(_plan(), _incident(), _verification(), _patches(), approval=approval)
+
+    assert "- **Status:** approved (auto, demo mode)" in body
+    assert "investigating" not in body
+    assert "no approval recorded in this preview" not in body
+
+
+def test_observed_values_for_every_criterion_are_rendered_inline() -> None:
+    body = render_pr_body(_plan(), _incident(), _verification(), _patches())
+
+    assert '"before": 1000' in body
+    assert '"after": 1000' in body
+    assert '"columns": 7' in body
+    assert "### Observed values" not in body
+
+
+def test_impact_sentence_is_computed_from_the_rendered_table() -> None:
+    body = render_pr_body(_plan(), _incident(), _verification(), _patches())
+
+    assert (
+        "1 downstream model (1 with direct column lineage) and 1 exposure, "
+        "owners: analytics@example.com are affected by the change to raw.orders.customer_id."
+        in body
+    )
+
+
+def test_follow_ups_come_from_the_category_playbook() -> None:
+    body = render_pr_body(_plan(), _incident(), _verification(), _patches())
+
+    assert "## Follow-ups" in body
+    assert "Confirm the old -&gt; new column mapping with the source owner" in body
+    assert "published contract for `raw.orders` needs updating" in body
+
+
+def test_fingerprint_is_in_the_footer() -> None:
+    body = render_pr_body(_plan(), _incident(), _verification(), _patches())
+
+    assert "> Fingerprint: `abcdef0123456789`" in body
+    assert body.rstrip().endswith(REVIEW_FOOTER)
+
+
+def test_title_is_a_conventional_commit_summary() -> None:
+    from dqs.publish.body import pr_title
+
+    title = pr_title(_plan(), _incident())
+
+    assert title == (
+        "fix(stg_orders): read renamed column customer_id from raw.orders (incident 12345678)"
+    )
+    assert len(title) <= 200

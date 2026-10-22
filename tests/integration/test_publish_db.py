@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.exc import IntegrityError
 from tests.helpers.fake_github import FakeGitHubClient
 from tests.helpers.publish import (
     INCIDENT_ID,
@@ -24,6 +25,7 @@ from tests.helpers.publish import (
 
 from dqs import db as dbmod
 from dqs.config import Settings
+from dqs.publish.base import PublicationKind, PublicationMode
 from dqs.publish.dry_run import preview_paths, run_dry_run
 from dqs.publish.github import GitHubPublisher
 from dqs.publish.store import DbPublicationStore
@@ -105,6 +107,7 @@ def test_live_publication_idempotency_survives_a_new_publisher(
     publish_engine: Engine,
 ) -> None:
     fake = FakeGitHubClient()
+    fake.seed_base_files(make_plan())
     settings = Settings(
         _env_file=None,
         github_mode="live",
@@ -142,3 +145,62 @@ def test_live_publication_idempotency_survives_a_new_publisher(
     with publish_engine.connect() as conn:
         count = conn.execute(text("SELECT count(*) FROM dq.publications")).scalar_one()
     assert count == 1
+
+
+def test_pending_then_done_lifecycle_and_the_unique_key(
+    publish_engine: Engine, tmp_path: Path
+) -> None:
+    store = DbPublicationStore(publish_engine)
+
+    store.begin(INCIDENT_ID, PublicationKind.PR, PublicationMode.DRY_RUN)
+    store.begin(INCIDENT_ID, PublicationKind.PR, PublicationMode.DRY_RUN)
+
+    assert store.has_pending(INCIDENT_ID, PublicationKind.PR)
+    assert store.find(INCIDENT_ID, PublicationKind.PR) is None
+    with publish_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT status, url FROM dq.publications WHERE incident_id = :i"),
+            {"i": INCIDENT_ID},
+        ).one()
+    assert row[0] == "pending" and row[1] is None
+
+    result = run_dry_run(
+        make_plan(),
+        make_incident(),
+        make_verification(),
+        store=store,
+        output_dir=tmp_path,
+    )
+    assert not store.has_pending(INCIDENT_ID, PublicationKind.PR)
+    found = store.find(INCIDENT_ID, PublicationKind.PR)
+    assert found is not None and found.url == result.url
+
+    # The database, not the application, now enforces one row per key.
+    with pytest.raises(IntegrityError):
+        with publish_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO dq.publications (incident_id, kind, mode, url, status) "
+                    "VALUES (:i, 'pr', 'dry_run', 'file:///x', 'done')"
+                ),
+                {"i": INCIDENT_ID},
+            )
+
+
+def test_sql_003_replays_safely(publish_engine: Engine, settings: Settings) -> None:
+    test_settings = settings.model_copy(update={"pg_database": TEST_DB})
+
+    # The fixture already initialized the database; replaying every script must
+    # find the column, the check constraint and the unique index already there.
+    dbmod.init_database(test_settings)
+    dbmod.init_database(test_settings)
+
+    with publish_engine.connect() as conn:
+        constraint = conn.execute(
+            text("SELECT 1 FROM pg_constraint WHERE conname = 'publications_status_check'")
+        ).first()
+        index = conn.execute(
+            text("SELECT 1 FROM pg_indexes WHERE indexname = 'publications_incident_kind_uniq'")
+        ).first()
+    assert constraint is not None
+    assert index is not None

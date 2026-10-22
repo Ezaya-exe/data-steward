@@ -56,13 +56,40 @@ def test_create_pr_with_a_plain_dict_is_refused(tmp_path) -> None:
 
 
 def test_approval_decision_requires_approve_and_a_timezone(tmp_path) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="note"):
         make_approval("reject")
     with pytest.raises(ValidationError, match="timezone-aware"):
         ApprovalDecision(
             approver="x",
             timestamp=dt.datetime(2026, 2, 1, 12, 0),
             decision="approve",
+        )
+
+
+def test_a_rejection_is_typed_but_the_publisher_refuses_it(tmp_path) -> None:
+    rejection = ApprovalDecision(
+        approver="shravan",
+        timestamp=dt.datetime(2026, 2, 1, 12, 0, tzinfo=dt.UTC),
+        decision="reject",
+        note="not this batch",
+    )
+    publisher, store = _publisher(tmp_path)
+
+    with pytest.raises(PublicationError, match="refused"):
+        publisher.create_pr(make_plan(), make_incident(), make_verification(), rejection)
+
+    assert store.rows == []
+    assert not list(tmp_path.iterdir())
+
+
+def test_auto_approval_can_only_approve() -> None:
+    with pytest.raises(ValidationError, match="auto approval"):
+        ApprovalDecision(
+            approver="auto",
+            timestamp=dt.datetime(2026, 2, 1, 12, 0, tzinfo=dt.UTC),
+            decision="reject",
+            note="why",
+            auto=True,
         )
 
 

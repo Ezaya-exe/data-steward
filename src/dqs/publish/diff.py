@@ -10,6 +10,11 @@ so the two cannot drift.
 Applying edits here reuses the Phase-5a allowlist and exact-match rules
 (`dqs.verify.patch`): project-relative paths under `models/`, no traversal or
 symlinks, and `old` must occur exactly once at the moment it is applied.
+
+Phase 6b: the rendered paths are **repo-root-relative**
+(`warehouse/dbt_project/models/...`). Git and the GitHub contents API both
+address the repository root, so a project-relative path would commit to the
+wrong location (or look like a `.patch` that `git apply` cannot find).
 """
 
 from __future__ import annotations
@@ -24,13 +29,20 @@ from dqs.errors import FixPlanError
 from dqs.models.fix import Edit
 from dqs.verify.patch import PROJECT_DIR, replace_once, validate_edit_paths
 
+REPO_PROJECT_ROOT: str = "warehouse/dbt_project"
+
+
+def repo_path(project_relative: str) -> str:
+    """Map an allowlisted project path to the repository-root-relative path."""
+    return f"{REPO_PROJECT_ROOT}/{project_relative.lstrip('/')}"
+
 
 class FilePatch(BaseModel):
     """One file's old/new content plus its reviewable unified diff."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    path: str = Field(min_length=1, description="Project-relative POSIX path.")
+    path: str = Field(min_length=1, description="Repo-root-relative POSIX path.")
     old_text: str
     new_text: str
     patch: str = Field(min_length=1)
@@ -95,7 +107,7 @@ def build_file_patches(edits: Sequence[Edit], project_dir: Path = PROJECT_DIR) -
         except FixPlanError as exc:
             raise FixPlanError(f"edit {index} in {relative}: {exc}") from exc
 
-    return [make_patch(path, originals[path], current[path]) for path in order]
+    return [make_patch(repo_path(path), originals[path], current[path]) for path in order]
 
 
 def full_patch(patches: Sequence[FilePatch]) -> str:
@@ -103,4 +115,11 @@ def full_patch(patches: Sequence[FilePatch]) -> str:
     return "".join(patch.patch for patch in patches)
 
 
-__all__ = ["FilePatch", "build_file_patches", "full_patch", "make_patch"]
+__all__ = [
+    "REPO_PROJECT_ROOT",
+    "FilePatch",
+    "build_file_patches",
+    "full_patch",
+    "make_patch",
+    "repo_path",
+]

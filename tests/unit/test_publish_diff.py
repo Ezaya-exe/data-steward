@@ -7,6 +7,7 @@ The key acceptance test is the exact F1 patch: a known edit against the real
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,8 @@ from dqs.verify.patch import PROJECT_DIR
 F1_OLD = "    customer_id::integer          as customer_id,"
 F1_NEW = "    coalesce(customer_id::integer, cust_id::integer) as customer_id,"
 F1_PATCH = (
-    "--- a/models/staging/stg_orders.sql\n"
-    "+++ b/models/staging/stg_orders.sql\n"
+    "--- a/warehouse/dbt_project/models/staging/stg_orders.sql\n"
+    "+++ b/warehouse/dbt_project/models/staging/stg_orders.sql\n"
     "@@ -1,7 +1,7 @@\n"
     " {{ config(materialized='table') }}\n"
     " select\n"
@@ -40,13 +41,34 @@ def test_known_f1_edit_produces_the_exact_patch() -> None:
 
     assert len(patches) == 1
     patch = patches[0]
-    assert patch.path == "models/staging/stg_orders.sql"
+    assert patch.path == "warehouse/dbt_project/models/staging/stg_orders.sql"
     assert patch.patch == F1_PATCH
     assert patch.added == 1
     assert patch.removed == 1
     assert F1_OLD in patch.old_text
     assert F1_NEW in patch.new_text
     assert full_patch(patches) == F1_PATCH
+
+
+def test_the_rendered_patch_applies_from_the_repository_root(tmp_path: Path) -> None:
+    patches = build_file_patches(
+        [Edit(path="models/staging/stg_orders.sql", old=F1_OLD, new=F1_NEW)]
+    )
+    patch_file = tmp_path / "fix.patch"
+    patch_file.write_text(full_patch(patches), encoding="utf-8", newline="\n")
+
+    # Git addresses paths from the repository root, so the same patch that the
+    # live publisher commits must be applicable from there (Phase 6b Task 0).
+    repo_root = PROJECT_DIR.parents[1]
+    result = subprocess.run(
+        ["git", "apply", "--check", str(patch_file)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_the_real_project_file_is_not_modified() -> None:

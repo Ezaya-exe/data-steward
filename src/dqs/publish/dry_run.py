@@ -21,6 +21,7 @@ from dqs.errors import FixPlanError, PublicationError
 from dqs.models.fix import FixPlan, VerificationResult
 from dqs.models.incident import Incident
 from dqs.publish.base import (
+    ApprovalDecision,
     PublicationKind,
     PublicationMode,
     PublicationResult,
@@ -57,7 +58,13 @@ class DryRunPublisher(Publisher):
         self.settings = settings
 
     def _create_pr(
-        self, plan: FixPlan, incident: Incident, verification: VerificationResult
+        self,
+        plan: FixPlan,
+        incident: Incident,
+        verification: VerificationResult,
+        approval: ApprovalDecision,
+        *,
+        retry: bool,
     ) -> PublicationResult:
         return _write_pr_preview(
             plan,
@@ -65,9 +72,17 @@ class DryRunPublisher(Publisher):
             verification,
             output_dir=self.output_dir,
             settings=self.settings,
+            approval=approval,
         )
 
-    def _create_issue(self, issue_md: IssueDraft | str, incident: Incident) -> PublicationResult:
+    def _create_issue(
+        self,
+        issue_md: IssueDraft | str,
+        incident: Incident,
+        approval: ApprovalDecision,
+        *,
+        retry: bool,
+    ) -> PublicationResult:
         return _write_issue_preview(
             issue_md,
             incident,
@@ -101,6 +116,7 @@ def run_dry_run(
     if existing is not None:
         return existing.model_copy(update={"reused": True})
 
+    store.begin(incident.incident_id, PublicationKind.PR, PublicationMode.DRY_RUN)
     result = _write_pr_preview(
         plan,
         incident,
@@ -108,7 +124,7 @@ def run_dry_run(
         output_dir=OUTPUT_DIR if output_dir is None else output_dir,
         settings=settings,
     )
-    store.record(result)
+    store.complete(result)
     return result
 
 
@@ -126,13 +142,16 @@ def _write_pr_preview(
     *,
     output_dir: Path,
     settings: Settings | None,
+    approval: ApprovalDecision | None = None,
 ) -> PublicationResult:
     try:
         patches = build_file_patches(plan.edits)
     except FixPlanError as exc:
         raise PublicationError(f"cannot render the fix diff: {exc}") from exc
 
-    body = render_pr_body(plan, incident, verification, patches, settings=settings)
+    body = render_pr_body(
+        plan, incident, verification, patches, approval=approval, settings=settings
+    )
     md_path, patch_path = preview_paths(incident.incident_id, output_dir=output_dir)
     try:
         output_dir.mkdir(parents=True, exist_ok=True)

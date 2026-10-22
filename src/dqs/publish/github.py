@@ -31,13 +31,14 @@ from dqs.errors import FixPlanError, PublicationError
 from dqs.models.fix import FixPlan, VerificationResult
 from dqs.models.incident import Incident
 from dqs.publish.base import (
+    ApprovalDecision,
     PublicationKind,
     PublicationMode,
     PublicationResult,
     Publisher,
 )
 from dqs.publish.body import pr_title, render_pr_body
-from dqs.publish.diff import build_file_patches
+from dqs.publish.diff import FilePatch, build_file_patches
 from dqs.publish.sanitize import sanitize_document, sanitize_text
 from dqs.publish.store import PublicationStore
 
@@ -83,6 +84,8 @@ class GitHubClient(Protocol):
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> tuple[int, str]: ...
 
+    def find_issue(self, marker: str) -> tuple[int, str] | None: ...
+
 
 class GitHubPublisher(Publisher):
     """Live publisher: branch, commit changed files, open PR/issue, label."""
@@ -105,14 +108,22 @@ class GitHubPublisher(Publisher):
         self.settings = settings
 
     def _create_pr(
-        self, plan: FixPlan, incident: Incident, verification: VerificationResult
+        self,
+        plan: FixPlan,
+        incident: Incident,
+        verification: VerificationResult,
+        approval: ApprovalDecision,
+        *,
+        retry: bool,
     ) -> PublicationResult:
         try:
             patches = build_file_patches(plan.edits)
         except FixPlanError as exc:
             raise PublicationError(f"cannot build the commit diff: {exc}") from exc
 
-        body = render_pr_body(plan, incident, verification, patches, settings=self.settings)
+        body = render_pr_body(
+            plan, incident, verification, patches, approval=approval, settings=self.settings
+        )
         title = pr_title(plan, incident)
         branch = branch_name(incident.incident_id)
         if branch == self.base_branch:
@@ -120,11 +131,14 @@ class GitHubPublisher(Publisher):
         message = commit_message(plan, incident)
 
         try:
-            if not self.client.branch_exists(branch):
-                self.client.create_branch(branch, self.client.base_sha(self.base_branch))
-
             existing = self.client.pull_for_branch(branch)
             if existing is None:
+                # A commit based on a stale checkout would silently revert
+                # someone else's change. Compare every target file with the
+                # base branch before creating the branch or writing anything.
+                _assert_base_matches(self.client, patches, self.base_branch)
+                if not self.client.branch_exists(branch):
+                    self.client.create_branch(branch, self.client.base_sha(self.base_branch))
                 for patch in patches:
                     remote = self.client.read_file(patch.path, branch)
                     self.client.put_file(
@@ -161,13 +175,30 @@ class GitHubPublisher(Publisher):
             reused=reused,
         )
 
-    def _create_issue(self, issue_md: IssueDraft | str, incident: Incident) -> PublicationResult:
+    def _create_issue(
+        self,
+        issue_md: IssueDraft | str,
+        incident: Incident,
+        approval: ApprovalDecision,
+        *,
+        retry: bool,
+    ) -> PublicationResult:
         content = issue_md.markdown if isinstance(issue_md, IssueDraft) else issue_md
         secrets = settings_secrets(self.settings) if self.settings is not None else []
         title = _issue_title(issue_md, incident)
-        body = sanitize_document(content, secrets=secrets)
+        marker = issue_marker(incident.incident_id)
+        body = sanitize_document(f"Incident marker: {marker}\n\n{content}", secrets=secrets)
 
         try:
+            existing = self.client.find_issue(marker) if retry else None
+            if existing is not None:
+                return PublicationResult(
+                    incident_id=incident.incident_id,
+                    kind=PublicationKind.ISSUE,
+                    mode=PublicationMode.LIVE,
+                    url=existing[1],
+                    reused=True,
+                )
             self.client.ensure_label(LABEL_NAME)
             _number, url = self.client.create_issue(title=title, body=body, labels=[LABEL_NAME])
         except PublicationError:
@@ -247,6 +278,34 @@ class PyGithubClient:
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> tuple[int, str]:
         issue = self._repo.create_issue(title=title, body=body, labels=list(labels))
         return int(issue.number), str(issue.html_url)
+
+    def find_issue(self, marker: str) -> tuple[int, str] | None:
+        for issue in self._repo.get_issues(state="open"):
+            if marker in (issue.title or "") or marker in (issue.body or ""):
+                return int(issue.number), str(issue.html_url)
+        return None
+
+
+def issue_marker(incident_id: uuid.UUID) -> str:
+    """Deterministic body marker used to recover a crashed issue publication."""
+    return f"dqs-incident-{incident_id.hex[:8]}"
+
+
+def _assert_base_matches(
+    client: GitHubClient, patches: Sequence[FilePatch], base_branch: str
+) -> None:
+    """Refuse to commit when the checkout differs from the base branch."""
+    for patch in patches:
+        remote = client.read_file(patch.path, base_branch)
+        if remote is None:
+            raise PublicationError(
+                f"{patch.path} does not exist on {base_branch}; push local commits first"
+            )
+        if remote.text != patch.old_text:
+            raise PublicationError(
+                f"{patch.path} on {base_branch} does not match the local checkout; "
+                "push local commits first"
+            )
 
 
 def branch_name(incident_id: uuid.UUID) -> str:
@@ -343,5 +402,6 @@ __all__ = [
     "branch_name",
     "build_publisher",
     "commit_message",
+    "issue_marker",
     "validate_branch_name",
 ]

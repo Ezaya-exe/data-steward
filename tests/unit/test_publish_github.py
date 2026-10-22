@@ -18,12 +18,13 @@ from tests.helpers.publish import (
 )
 
 from dqs.errors import PublicationError
-from dqs.publish.base import PublicationMode
+from dqs.publish.base import PublicationKind, PublicationMode
 from dqs.publish.dry_run import DryRunPublisher
 from dqs.publish.github import (
     BRANCH_PATTERN,
     LABEL_NAME,
     GitHubPublisher,
+    RemoteFile,
     branch_name,
     build_publisher,
     validate_branch_name,
@@ -62,6 +63,7 @@ def _publisher(
 
 def test_live_pr_uses_the_validated_incident_branch_and_never_the_base() -> None:
     fake = FakeGitHubClient()
+    fake.seed_base_files(make_plan())
     publisher, store = _publisher(fake)
     expected = branch_name(INCIDENT_ID)
 
@@ -77,7 +79,7 @@ def test_live_pr_uses_the_validated_incident_branch_and_never_the_base() -> None
 
     writes = [payload for name, payload in fake.calls if name == "put_file"]
     assert len(writes) == 1
-    assert writes[0]["path"] == "models/staging/stg_orders.sql"
+    assert writes[0]["path"] == "warehouse/dbt_project/models/staging/stg_orders.sql"
     assert writes[0]["branch"] == expected != BASE
     assert "coalesce(customer_id::integer, cust_id::integer)" in writes[0]["content"]
 
@@ -95,6 +97,7 @@ def test_live_pr_uses_the_validated_incident_branch_and_never_the_base() -> None
 
 def test_live_pr_is_idempotent_across_a_second_run() -> None:
     fake = FakeGitHubClient()
+    fake.seed_base_files(make_plan())
     store = MemoryPublicationStore()
     first_publisher, _ = _publisher(fake, store=store)
     first = first_publisher.create_pr(
@@ -212,11 +215,61 @@ def test_refuses_when_the_base_branch_is_the_incident_branch() -> None:
     assert fake.calls == []
 
 
+def test_refuses_when_the_base_branch_file_differs_from_the_local_checkout() -> None:
+    fake = FakeGitHubClient()
+    target = "warehouse/dbt_project/models/staging/stg_orders.sql"
+    fake.files[(target, BASE)] = RemoteFile(text="someone else's version", sha="remote")
+
+    publisher, store = _publisher(fake)
+
+    with pytest.raises(PublicationError, match="push local commits first"):
+        publisher.create_pr(make_plan(), make_incident(), make_verification(), make_approval())
+
+    written = [
+        name for name, _ in fake.calls if name in {"create_branch", "put_file", "create_pull"}
+    ]
+    assert written == []
+    assert store.rows == []
+
+
+def test_refuses_when_a_target_file_is_missing_on_the_base_branch() -> None:
+    fake = FakeGitHubClient()
+    publisher, _ = _publisher(fake)
+
+    with pytest.raises(PublicationError, match="push local commits first"):
+        publisher.create_pr(make_plan(), make_incident(), make_verification(), make_approval())
+
+    assert not [name for name, _ in fake.calls if name in {"create_branch", "put_file"}]
+
+
+def test_pending_issue_retry_recovers_the_existing_issue_by_marker() -> None:
+    fake = FakeGitHubClient()
+    store = MemoryPublicationStore()
+    publisher, _ = _publisher(fake, store=store)
+    incident = make_incident()
+
+    # Simulate a crash after GitHub created the issue but before the row went
+    # from pending to done: the next attempt sees the pending marker.
+    publisher.create_issue("body text", incident, make_approval())
+    created = fake.issues[0]
+    store.rows.clear()
+    store.pending.add((incident.incident_id, PublicationKind.ISSUE))
+    fake.reset_calls()
+
+    result = publisher.create_issue("body text", incident, make_approval())
+
+    assert result.reused
+    assert result.url == created["url"]
+    assert [name for name, _ in fake.calls] == ["find_issue"]
+    assert len(fake.issues) == 1
+
+
 def test_github_errors_are_wrapped_with_the_token_redacted() -> None:
     fake = FakeGitHubClient(
         fail_on="create_pull",
         fail_message="401 bad credentials for ghp_supersecrettoken1234567890",
     )
+    fake.seed_base_files(make_plan())
     publisher, store = _publisher(fake)
 
     with pytest.raises(PublicationError) as raised:
