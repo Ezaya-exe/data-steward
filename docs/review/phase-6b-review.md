@@ -54,7 +54,7 @@ interrupt/resume approval gate, `dqs incident run|approve|reject|status`, and
 | Node exception → failed + checkpoint kept | PASS | `test_node_exception_marks_the_incident_failed_and_keeps_the_checkpoint` |
 | Status transitions each path | PASS | asserted status lists/terminal states in the workflow tests |
 | Auto-approval explicit + labeled | PASS | `test_auto_approval_can_only_approve`; body test; real preview |
-| CLI `run|approve|reject|status` | PASS | `tests/unit/test_cli_incident.py` (5 tests) + real `status` call |
+| CLI `run\|approve\|reject\|status` | PASS | `tests/unit/test_cli_incident.py` (5 tests) + real `status` call |
 | `dqs demo` whole story | PASS | real `86a9bc7a` run: `resolved`, PR after 2 verified attempts, 30 baseline days in `dqs_demo`, dry-run preview; plus a real ISSUE escalation (`cae4d758`) |
 | Warehouse untouched / only `dqs_demo` | PASS | see phase note's post-run checks |
 | Quality gates | PASS | ruff/format/mypy clean (96 source files); unit 557 passed / 1 skipped; integration 92 passed / 6 skipped |
