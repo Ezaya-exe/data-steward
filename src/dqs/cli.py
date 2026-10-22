@@ -10,6 +10,8 @@ added phase by phase — commands are not invented here):
 - `dqs dbt build [--target dev|sandbox]`                                    (Phase 1)
 - `dqs verify <plan.json> | cleanup`                                        (Phase 5a)
 - `dqs incident plan-fix <id>`                                              (Phase 5b)
+- `dqs incident run|approve|reject|status <id>`                              (Phase 6b)
+- `dqs demo [--fault SPEC] [--yes] [--reset]`                                (Phase 6b)
 - `dqs publish preview <id>`                                                (Phase 6a, dry-run only)
 
 Errors from the layer below are caught and printed; the process exit code is
@@ -22,7 +24,7 @@ import datetime as dt
 import json
 import uuid
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -32,6 +34,7 @@ from sqlalchemy import Engine
 
 from dqs import db as dbmod
 from dqs import dbt_run
+from dqs import demo as demo_mod
 from dqs import dev as devmod
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
@@ -41,7 +44,7 @@ from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.smoke import run_smoke
 from dqs.agents.steps import DbStepSink
 from dqs.checks.engine import CheckEngine
-from dqs.config import load_settings
+from dqs.config import Settings, load_settings
 from dqs.contracts import generation as contracts_generation
 from dqs.contracts import store as contracts_store
 from dqs.errors import DqsError, FaultSpecError
@@ -52,6 +55,7 @@ from dqs.models.faults import FaultSpec
 from dqs.models.fix import FixPlan
 from dqs.models.impact import ImpactReport
 from dqs.models.root_cause import RootCause
+from dqs.models.state import WorkflowOutcome
 from dqs.models.violation import Violation
 from dqs.publish.dry_run import preview_paths, run_dry_run
 from dqs.publish.store import DbPublicationStore, load_latest_fix_attempt
@@ -60,6 +64,7 @@ from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
 from dqs.tools.base import ToolContext
 from dqs.verify.sandbox import cleanup_stale_sandboxes, verify_fix
+from dqs.workflow.runner import DEFAULT_CHECKPOINT_PATH, IncidentWorkflow, make_deps
 
 app = typer.Typer(name="dqs", help="Agentic data-quality steward for batch pipelines.")
 db_app = typer.Typer(help="Warehouse bootstrap commands (roles, schemas, dq tables).")
@@ -640,6 +645,365 @@ def incident_plan_fix(
         f"[green]PASS[/green] fix verified in attempt {result.attempts[-1].attempt_no}; "
         "plan and attempt are persisted"
     )
+
+
+@incident_app.command("run")
+def incident_run(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+    auto_approve: bool = typer.Option(
+        False,
+        "--auto-approve",
+        help="Approve without a human (benchmark/demo only; labeled in the PR body).",
+    ),
+    provider: str | None = typer.Option(None, help="Provider override (default: LLM_PROVIDER)."),
+    model: str | None = typer.Option(None, help="Model override (default: LLM_MODEL)."),
+) -> None:
+    """Run the whole §10.2 workflow until it publishes or waits for approval."""
+    identifier = _parse_incident_id(incident_id)
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    context: ToolContext | None = None
+    try:
+        context = ToolContext.from_settings(settings)
+        deps = make_deps(settings, engine, provider=provider, model=model, tool_context=context)
+        with IncidentWorkflow(deps) as workflow:
+            outcome = workflow.run(identifier, auto_approve=auto_approve)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        if context is not None:
+            context.close()
+        engine.dispose()
+    _print_workflow_outcome(outcome)
+    if outcome.status.value == "failed":
+        raise typer.Exit(1)
+
+
+def _workflow_for(settings: Settings, engine: Engine) -> tuple[IncidentWorkflow, ToolContext]:
+    """Build the production deps and a resumable workflow for one CLI call."""
+    context = ToolContext.from_settings(settings)
+    deps = make_deps(settings, engine, tool_context=context)
+    return IncidentWorkflow(deps), context
+
+
+@incident_app.command("approve")
+def incident_approve(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+    note: str = typer.Option("", "--note", help="Optional note recorded with the approval."),
+    approver: str | None = typer.Option(
+        None, "--approver", help="Who approved (default: OS user name or 'operator')."
+    ),
+) -> None:
+    """Approve the artifact built by the paused workflow; only then is it published."""
+    identifier = _parse_incident_id(incident_id)
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    context: ToolContext | None = None
+    try:
+        workflow, context = _workflow_for(settings, engine)
+        with workflow:
+            outcome = workflow.resume(
+                identifier,
+                decision="approve",
+                approver=_approver_name(approver),
+                note=note,
+            )
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        if context is not None:
+            context.close()
+        engine.dispose()
+    _print_workflow_outcome(outcome)
+    if outcome.status.value == "failed":
+        raise typer.Exit(1)
+
+
+@incident_app.command("reject")
+def incident_reject(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+    note: str = typer.Option(
+        ..., "--note", help="Why the artifact was rejected (required, kept in the audit trail)."
+    ),
+    approver: str | None = typer.Option(
+        None, "--approver", help="Who rejected (default: OS user name or 'operator')."
+    ),
+) -> None:
+    """Reject the pending artifact; nothing is published and the reason is stored."""
+    identifier = _parse_incident_id(incident_id)
+    if not note.strip():
+        raise typer.BadParameter("--note must not be empty")
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    context: ToolContext | None = None
+    try:
+        workflow, context = _workflow_for(settings, engine)
+        with workflow:
+            outcome = workflow.resume(
+                identifier,
+                decision="reject",
+                approver=_approver_name(approver),
+                note=note,
+            )
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        if context is not None:
+            context.close()
+        engine.dispose()
+    _print_workflow_outcome(outcome)
+    if outcome.status.value == "failed":
+        raise typer.Exit(1)
+
+
+@incident_app.command("status")
+def incident_status(
+    incident_id: str = typer.Argument(..., help="Incident id (uuid)."),
+) -> None:
+    """Print the stored lifecycle state, resolution and checkpoint location."""
+    identifier = _parse_incident_id(incident_id)
+    settings = load_settings()
+    engine = dbmod.make_rw_engine(settings)
+    try:
+        incident = incidents_mod.get_incident(engine, identifier)
+    except DqsError as exc:
+        _fail(exc)
+    finally:
+        engine.dispose()
+    if incident is None:
+        _fail(DqsError(f"no incident with id {incident_id}"))
+    console.print(
+        f"incident {str(incident.incident_id)[:8]} status={incident.status.value} "
+        f"severity={incident.severity.value} table={incident.table or '-'}"
+    )
+    console.print(f"  updated {incident.updated_at.isoformat()}")
+    resolution = incident.resolution or {}
+    if resolution:
+        console.print_json(data=resolution)
+    else:
+        console.print("  resolution: (none recorded yet)")
+    checkpoint = Path(DEFAULT_CHECKPOINT_PATH)
+    console.print(f"  checkpoint {checkpoint} ({'present' if checkpoint.exists() else 'missing'})")
+    if incident.status.value == "awaiting_approval":
+        console.print(
+            f"  next: dqs incident approve {incident.incident_id} "
+            f"or dqs incident reject {incident.incident_id} --note TEXT"
+        )
+
+
+def _parse_incident_id(raw: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(raw)
+    except ValueError as exc:
+        raise typer.BadParameter(f"incident id must be a uuid ({exc})") from exc
+
+
+def _approver_name(explicit: str | None) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip()
+    import getpass
+
+    try:
+        return getpass.getuser() or "operator"
+    except Exception:  # getuser can fail in minimal containers
+        return "operator"
+
+
+def _print_workflow_outcome(outcome: WorkflowOutcome) -> None:
+    """One compact, honest summary for run/approve/reject."""
+    console.print(
+        f"incident {str(outcome.incident_id)[:8]} status={outcome.status.value} "
+        f"resolution={outcome.resolution_type.value if outcome.resolution_type else '-'} "
+        f"attempts={outcome.attempts} checkpoint={outcome.checkpoint_path}",
+        markup=False,
+    )
+    if outcome.error:
+        console.print(f"[red]failed[/red] {outcome.error}")
+        return
+    budget = outcome.state.get("budget")
+    if isinstance(budget, dict):
+        console.print(
+            f"  budget tool_calls={budget.get('tool_calls_used')} "
+            f"tokens={budget.get('tokens_used')} elapsed_s={budget.get('elapsed_seconds')} "
+            f"limits calls={budget.get('max_tool_calls')} tokens={budget.get('max_tokens')} "
+            f"timeout_s={budget.get('timeout_seconds')}"
+        )
+    if outcome.interrupted:
+        request = outcome.approval_request or {}
+        kind = request.get("kind", "artifact")
+        console.print(
+            f"[yellow]waiting for approval[/yellow] {kind} "
+            f"(resolution={request.get('resolution', '-')}, "
+            f"verification_attempts={request.get('attempts', 0)})"
+        )
+        root_cause = request.get("root_cause") or {}
+        impact = request.get("impact") or {}
+        if root_cause:
+            console.print(f"  root cause: {root_cause.get('summary', '-')}")
+        if impact:
+            console.print(f"  impact: {impact.get('summary', '-')}")
+        verification = request.get("verification") or {}
+        if verification:
+            console.print(
+                f"  verification: passed={verification.get('passed')} "
+                f"failed={', '.join(verification.get('failed_criteria') or []) or '-'}"
+            )
+        diff = request.get("diff")
+        if diff:
+            console.print("[bold]diff (truncated)[/bold]")
+            console.print("\n".join(str(diff).splitlines()[:60]), markup=False)
+        console.print(
+            f"  next: dqs incident approve {outcome.incident_id} "
+            f"or dqs incident reject {outcome.incident_id} --note TEXT"
+        )
+    if outcome.publication is not None:
+        console.print(
+            f"[green]published[/green] {outcome.publication.kind.value} "
+            f"({outcome.publication.mode.value}) {outcome.publication.url}"
+        )
+
+
+@app.command("demo")
+def demo(
+    fault: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--fault",
+            help=(
+                "Fault spec (repeatable), e.g. "
+                "column_rename:orders.customer_id:new_name=cust_id. "
+                f"Default: {demo_mod.DEFAULT_FAULT}"
+            ),
+        ),
+    ] = None,
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        help="Approve without a prompt (benchmark/demo only; visibly labeled in the artifact).",
+    ),
+    reset: bool = typer.Option(
+        False, "--reset", help=f"Drop and recreate {demo_mod.DEMO_DB} before seeding."
+    ),
+) -> None:
+    """Run the whole break → detect → diagnose → verify → preview story.
+
+    The demo owns a **separate** database (`dqs_demo`); the warehouse configured
+    in `.env` is never read or written. Publication follows `GITHUB_MODE`, so
+    the default is a local PR preview under `out/pr_previews/`.
+    """
+    settings = load_settings()
+    chosen = list(fault) if fault else [demo_mod.DEFAULT_FAULT]
+    console.print(
+        f"demo database={demo_mod.DEMO_DB} warehouse={settings.pg_database} "
+        f"fault={' + '.join(chosen)} mode={settings.github_mode}",
+        markup=False,
+    )
+    if yes:
+        console.print(
+            "[yellow]auto-approve[/yellow] enabled (--yes): the published artifact "
+            "will be labeled as auto-approved"
+        )
+
+    def progress(message: str) -> None:
+        console.print(f"[dim]{message}[/dim]")
+
+    try:
+        result = demo_mod.run_demo(
+            settings,
+            fault_specs=chosen,
+            auto_approve=yes,
+            reset=reset,
+            approver="auto",
+            approval_callback=None if yes else _demo_approval_callback,
+            progress=progress,
+        )
+    except DqsError as exc:
+        _fail(exc)
+
+    _print_demo_result(result)
+    if result.outcome.status.value == "failed":
+        raise typer.Exit(1)
+
+
+def _demo_approval_callback(request: dict[str, Any]) -> tuple[bool, str]:
+    """Interactive approval prompt for the demo (never used with `--yes`)."""
+    kind = request.get("kind", "artifact")
+    resolution = request.get("resolution", "-")
+    attempts = request.get("attempts", 0)
+    console.print(
+        f"[yellow]approval required[/yellow] {kind} "
+        f"(resolution={resolution}, verification_attempts={attempts})"
+    )
+    root_cause = request.get("root_cause") or {}
+    if root_cause:
+        console.print(f"  root cause: {root_cause.get('summary', '-')}")
+    impact = request.get("impact") or {}
+    if impact:
+        console.print(f"  impact: {impact.get('summary', '-')}")
+    verification = request.get("verification") or {}
+    if verification:
+        console.print(
+            f"  verification: passed={verification.get('passed')} "
+            f"failed={', '.join(verification.get('failed_criteria') or []) or '-'}"
+        )
+    diff = request.get("diff")
+    if diff:
+        console.print("[bold]diff (truncated)[/bold]")
+        console.print("\n".join(str(diff).splitlines()[:60]), markup=False)
+    if not typer.confirm("Approve and publish this artifact?", default=False):
+        note = typer.prompt(
+            "Reason for rejection", default="rejected by the demo operator", show_default=True
+        )
+        return False, note
+    note = typer.prompt("Approval note (optional)", default="", show_default=False)
+    return True, note
+
+
+def _print_demo_result(result: demo_mod.DemoResult) -> None:
+    """Transcript: incident, timeline, and the exact preview path(s)."""
+    outcome = result.outcome
+    console.print(
+        f"incident {str(outcome.incident_id)[:8]} status={outcome.status.value} "
+        f"resolution={outcome.resolution_type.value if outcome.resolution_type else '-'} "
+        f"attempts={outcome.attempts}",
+        markup=False,
+    )
+    console.print(
+        f"  database={result.database} baseline_days={result.baseline_days} "
+        f"fault_date={result.fault_date.isoformat()} faults={', '.join(result.fault_specs)}",
+        markup=False,
+    )
+    console.print(f"  monitor created {len(result.created_incidents)} incident(s)")
+    if result.steps:
+        table = Table(show_header=True, header_style="bold")
+        for column in ("node", "seq", "kind", "name", "tokens", "latency_ms"):
+            table.add_column(column)
+        for step in result.steps:
+            table.add_row(
+                step.node,
+                str(step.seq),
+                step.kind,
+                step.name,
+                f"{step.tokens_in}+{step.tokens_out}",
+                str(step.latency_ms),
+            )
+        console.print(table)
+    else:
+        console.print("  timeline: no agent steps recorded")
+    if outcome.publication is not None:
+        publication = outcome.publication
+        console.print(
+            f"[green]published[/green] {publication.kind.value} "
+            f"({publication.mode.value}) {publication.url}"
+        )
+        if result.preview_md is not None:
+            console.print(f"  body:  {result.preview_md}", markup=False)
+        if result.preview_patch is not None:
+            console.print(f"  patch: {result.preview_patch}", markup=False)
+    else:
+        console.print("[yellow]nothing published[/yellow] (rejected or no artifact)")
+    if outcome.error:
+        console.print(f"[red]failed[/red] {outcome.error}", markup=False)
 
 
 @publish_app.command("preview")

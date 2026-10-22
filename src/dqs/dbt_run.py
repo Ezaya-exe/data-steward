@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,48 @@ def dbt_executable() -> Path:
     if not path.exists():
         raise ConfigError(f"dbt executable not found at {path}; install dbt-core in the venv")
     return path
+
+
+# Same minimal allowlist as the sandbox: the dbt child never inherits API keys
+# or tokens, and PG* always comes from Settings (so `dqs demo` can point dbt at
+# `dqs_demo` instead of the ambient warehouse).
+_BASE_ENV_ALLOWLIST: Final = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+    }
+)
+
+
+def dbt_env(settings: Settings) -> dict[str, str]:
+    """Child environment for a dbt build, derived only from Settings."""
+    normalized = {key.upper(): value for key, value in os.environ.items()}
+    env = {key: normalized[key] for key in _BASE_ENV_ALLOWLIST if normalized.get(key)}
+    env.update(
+        {
+            "PGHOST": settings.pg_host,
+            "PGPORT": str(settings.pg_port),
+            "PGUSER": settings.pg_user,
+            "PGPASSWORD": settings.pg_password,
+            "PGDATABASE": settings.pg_database,
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+        }
+    )
+    return env
 
 
 def _readable_node_name(unique_id: str) -> str:
@@ -124,7 +167,9 @@ def run_dbt_build(
         cmd += ["--select", select]
     logger.info("run dbt: %s", " ".join(cmd))
     started = dt.datetime.now(dt.UTC)
-    completed = subprocess.run(cmd, cwd=str(PROJECT_DIR), capture_output=True, text=True)
+    completed = subprocess.run(
+        cmd, cwd=str(PROJECT_DIR), capture_output=True, text=True, env=dbt_env(settings)
+    )
     finished = dt.datetime.now(dt.UTC)
     output = (
         completed.stdout if completed.stderr == "" else completed.stdout + "\n" + completed.stderr
