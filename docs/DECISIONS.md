@@ -801,3 +801,76 @@ entry each; newest last.
      version, prompt hashes and a whitelisted non-secret settings snapshot.
      `--repeats` (mentioned in ARCHITECTURE 14/15 as future variance work) is
      not part of Phase 8a.
+
+
+128. **The benchmark and the demo force `GITHUB_MODE=dry_run`; they do not
+     refuse a live `.env`.** A benchmark may take hundreds of model decisions,
+     and one stale environment variable must not turn that into live issues/PRs.
+     The demo auto-approves, so the same rule applies there. Forcing the
+     effective mode (rather than refusing to start) keeps both flows runnable
+     while still constructing only the dry-run publisher. The results metadata
+     records both values (`github_mode_env` from `.env` and the effective
+     `github_mode=dry_run`, plus `github_mode_forced`). A live `GITHUB_MODE` was
+     previously refused for the benchmark (DECISIONS 124); this supersedes that
+     behaviour. The unit/integration safety tests run a PR scenario with a live
+     setting and a recording GitHub client and assert zero client calls; the
+     demo's pure settings helper is tested separately.
+129. **Provenance is a code fingerprint, not only `HARNESS_VERSION`.** Every
+     results file stores `git_sha`, `git_dirty`, and one SHA-256 over the source
+     files that can change an answer: `agents/`, `tools/`, `verify/`,
+     `workflow/`, `checks/`, `contracts/`, `resolve.py`, `sim/faults.py`,
+     `bench/scoring.py`, `bench/scenarios.py`, `bench/oracle.py`, and every file
+     under `agents/prompts/`. Paths are hashed with the bytes, so renames and
+     additions change the fingerprint. `HARNESS_VERSION` remains a human-facing
+     label (bumped to `8b.1` for this phase) but is not the comparison key. A
+     holdout/all run refuses to start when the fingerprint differs from the
+     newest earlier dev file unless `--acknowledge-changes "reason"` is given;
+     the reason is recorded in metadata. This makes a holdout run after a code
+     change deliberate and auditable.
+130. **Provider rate-limit/quota failures are `infra_error`, not agent misses.**
+     After the LLM client's retries are exhausted, any HTTP 429 or message
+     matching rate-limit/quota/too-many-requests/limit wording is classified as
+     an infrastructure error. The classification is wording-based and
+     provider-independent because the workflow converts the original exception
+     into `outcome.error` text. Infra records are persisted (so resume can find
+     them) but excluded from every score denominator and listed separately with
+     a count. `--resume` re-runs them automatically. A daily-quota error records
+     the attempt and stops immediately; any other infra error stops after two
+     consecutive failures (circuit breaker) with a resume hint. This keeps a
+     provider outage from looking like a model-quality failure.
+131. **The daily token cap is backed by a per-UTC-day ledger on disk.**
+     `data/token_ledger.json` (git-ignored) maps UTC date -> provider/model ->
+     tokens (input + output). Every benchmark invocation consults and updates
+     it, so two short sessions on the same day cannot each spend the full cap.
+     The ledger records **benchmark runs only**; the runner prints the prior
+     total at start and warns that `dqs demo`, real-LLM tests and another
+     terminal using the same key share the provider quota. A malformed ledger is
+     treated as empty (it is a budget hint, not evidence) and writes are
+     write-then-replace.
+132. **Every proportion is reported with n and a 95% Wilson interval.** The
+     report prints `rate (k/n) [low-high]` for detection, root-cause category,
+     columns, resolution, verifier pass, semantic correctness,
+     verified-but-wrong and false positives. Wilson is used instead of the
+     normal approximation because it behaves at 0% and 100% and gives an
+     explicit `n/a` for n=0. The exact numerator/denominator are stored in each
+     `MetricBlock`; the report never reconstructs them from a rounded rate. The
+     interval is a description of sampling uncertainty, not a significance
+     test between models.
+133. **`--repeats N` is part of the runner and the results key.** A scenario
+     repeat is an independent run with the same database lifecycle, keyed by
+     `(scenario_id, repeat)`. Results are written separately and the report adds
+     a per-scenario `stable`/`flaky` table by comparing the scored outcome keys.
+     The runbook recommends ~5 scenarios x 3 repeats for a variance check rather
+     than repeating the whole catalogue. `--resume` refuses a different repeat
+     count. This replaces the Phase-8a note that repeats were future work.
+134. **Preflight is a read-only PASS/FAIL screen, and the runbook is the
+     operator contract.** `dqs bench preflight` checks Postgres, the cached
+     template's content hash/seed/day count, approved contracts, the effective
+     GitHub mode, the configured model, harness/prompt hashes, free disk and
+     key presence; it makes no LLM or GitHub call and never prints the key.
+     `docs/BENCH_RUNBOOK.md` gives the exact PowerShell commands, a pilot of four
+     dev scenarios (`f1-orders-status`, `f4-orders-status-20`,
+     `f6-order-items-15`, `clean-01`) covering PR/ISSUE/control, resume paths,
+     the stop-message meanings, the model/harness change procedure and Windows
+     power settings. The pilot is an operational smoke test, not a benchmark
+     result.

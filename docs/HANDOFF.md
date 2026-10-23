@@ -1,17 +1,30 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-23 (Phase 8a complete; Phase 8b not started) · Do not
-treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
+Last updated: 2026-10-23 (Phase 8b preparation complete; real benchmark not run)
+· Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **Phase 8b preparation is complete; no real benchmark has been run.** The
+  owner's next action is the runbook pilot in `docs/BENCH_RUNBOOK.md` §2, then
+  the first dev run. Do not start Phase 7 (Streamlit) or a full benchmark
+  unasked.
+- **Phase 8b prep deliverables**: `bench/preflight.py` (`dqs bench preflight`,
+  read-only PASS/FAIL); `bench/ledger.py` (per-UTC-day token ledger at
+  `data/token_ledger.json`); `bench/harness.py` (`code_fingerprint`,
+  `git_dirty`, `HARNESS_VERSION=8b.1`); `bench/scoring.py` (infra errors excluded
+  from denominators, exact numerators, `wilson_interval`); `bench/report.py`
+  (n + 95% Wilson intervals, dirty/fingerprint/ack metadata, infra and repeat
+  sections); `bench/runner.py` (forced dry-run, infra circuit breaker,
+  daily-quota stop, `--repeats`, fingerprint ack, ledger); `agents/llm.py`
+  (`is_infra_error`, `is_daily_quota_message`); CLI `bench preflight` and new
+  `bench run` flags; `demo.py` forced dry-run; `docs/BENCH_RUNBOOK.md`;
+  DECISIONS 128–134.
 - **Phase 8a (fast warehouse reset, investigator harness fixes, benchmark
-  catalogue, deterministic scorer, quota-aware runner/CLI/report) is complete
-  and ready for review.** Report: `docs/phase-notes/phase-8a.md`; review packet:
-  `docs/review/phase-8a-review.md`. **No real benchmark was run: Phase 8b
-  (`dqs bench run --split dev` with `LLM_MODEL_BENCH`) is the owner's next
-  decision. Do not start Phase 7 (Streamlit) or 8b unasked.**
+  catalogue, deterministic scorer, quota-aware runner/CLI/report) remains
+  complete.** Report: `docs/phase-notes/phase-8a.md`; review packet:
+  `docs/review/phase-8a-review.md`.
 - **Phase 8a deliverables**: `fast_reset.py` (`dqs_template`,
   `dq.template_meta`, content hash, clones, name guards); bulk `COPY` in
   `sim/loader.py` + one dbt build in `sim/pipeline.seed_baseline`; `demo.py`
@@ -100,17 +113,16 @@ docs/ARCHITECTURE.md is design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **627 unit + 98 integration (non-llm)** passing (integration 6 skipped
-  are the real-LLM suites, `RUN_LLM_TESTS=1`); ruff check/format clean (164
-  files) and `mypy src` clean (99 source files). Phase-6b routing/resume/
-  publish-once tests use a fake LLM and a real SQLite checkpointer; the Phase-5b
-  real-LLM acceptance covers F1/F3/F6 (two models, see above); the earlier 3
-  investigator smoke tests still pass with `RUN_LLM_TESTS=1`. Phase 8a adds 71
-  unit tests (fast reset, catalogue, scoring, report, runner, isolation,
-  RootCause/salvage, daily quota) and one 6-test integration module (template,
-  checksums, clone, warehouse guard, three fake-LLM scenarios). The one skipped
-  unit test is real OS symlink creation (Windows privilege); junction +
-  simulated-symlink branches pass.
+- Tests: **659 unit** passing on 2026-10-23 (1 skipped: real OS symlink
+  creation on Windows), plus the **7-test Phase-8a/8b benchmark integration
+  module** (template identity/checksums, clone, reuse/rebuild, warehouse guard,
+  three fake-LLM scenarios, forced dry-run with a live `GITHUB_MODE` and a
+  recording GitHub client) re-run green. ruff check/format and `mypy src` are
+  clean (101 source files, 199 files formatted). The 105 deselected integration
+  tests include the real-LLM suites (`RUN_LLM_TESTS=1`); run `dqs dev test-int`
+  for the full set. Phase 8b prep adds unit coverage for preflight, the token
+  ledger, Wilson intervals, infra exclusion, circuit breaker/resume, repeats,
+  fingerprint acknowledgement and the report's stability/infra sections.
 - Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
   0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
@@ -453,9 +465,11 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - `dqs sim day --fault`, contracts, check engine / monitor / incidents,
   `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator, the
   Phase-5a deterministic sandbox verification, the Phase-5b fixer/issue/
-  plan-fix path, the Phase-6a publish package, the Phase-6b workflow/demo and
-  the Phase-8a benchmark backend all work and are tested. Phase 7 (Streamlit)
-  is not started; Phase 8b (real benchmark run) has not been run.
+  plan-fix path, the Phase-6a publish package, the Phase-6b workflow/demo, the
+  Phase-8a benchmark backend and the Phase-8b preparation (preflight, ledger,
+  fingerprint, infra handling, repeats, Wilson report) all work and are tested.
+  Phase 7 (Streamlit) is not started; **no real benchmark run has been
+  performed** (Phase 8b run is the owner's next decision).
 - Publication now uses a `pending` → `done` lifecycle with a unique
   `(incident_id, kind)` key (DECISIONS 113) and a deterministic branch/issue
   marker for retry. The remaining gap is concurrency: `find` + `begin` is not a
@@ -515,15 +529,23 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   manifest after a failed build); Postgres must be up.
 - `dq.publications` has no primary key by spec (§4.3) — idempotency is
   enforced in application code (Phase 6a).
-- **Phase 8a is backend-only.** No real model has run the benchmark yet
-  (Phase 8b); the three prior single runs suggest ~22,800 tokens/scenario, which
-  projects to ~4.2 days dev / ~1.8 days holdout at a 200K/day cap — a planning
-  estimate, not a measurement. There are no repeats/variance. The template
-  content hash covers generator + contracts + dbt content, not `sim/loader.py`;
-  a hard kill can leave one `dqs_bench_*` DB (the next run drops it). Daily-quota
-  detection is provider-text based, and prompts are frozen at harness `8a.1`.
+- **Phase 8a is backend-only; Phase 8b now has an operator runbook but still no
+  real benchmark measurement.** The three prior single runs suggest ~22,800
+  tokens/scenario, which projects to ~4.2 days dev / ~1.8 days holdout at a
+  200K/day cap - a planning estimate, not a measurement. The template content
+  hash covers generator + contracts + dbt content, not `sim/loader.py`; a hard
+  kill can leave one `dqs_bench_*` DB (the next run drops it). Daily-quota
+  detection is provider-text based; prompts are frozen at harness `8b.1`.
 - A benchmark results file is one model/provider per file (`--resume` refuses a
   mismatch). Holdout requires `--confirm-holdout` and must not guide prompt
-  tuning (AGENTS §7.9).
+  tuning (AGENTS §7.9). A holdout/all run also requires
+  `--acknowledge-changes "reason"` when the code fingerprint differs from the
+  newest dev file.
+- The token ledger is only a benchmark budget: `dqs demo`, real-LLM tests and
+  another terminal using the same key share the provider quota and are invisible
+  to it. The ledger and results JSON are git-ignored.
+- Wilson intervals describe sampling uncertainty for one run; they are not a
+  test of whether two models differ, and a 4-scenario pilot interval is very
+  wide.
 - Windows console shows mojibake for some rich Unicode glyphs — cosmetic only.
 - No git remote; push instructions live with the owner.
