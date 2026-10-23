@@ -26,7 +26,6 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import Engine, text
-from tests.helpers import oracle
 
 from dqs import db as dbmod
 from dqs import dbt_run
@@ -37,6 +36,7 @@ from dqs.agents.investigator import NODE_NAME as INVESTIGATOR_NODE
 from dqs.agents.investigator import investigate
 from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.steps import DbStepSink
+from dqs.bench import oracle
 from dqs.config import Settings
 from dqs.contracts import store
 from dqs.lineage.graph import LineageGraph

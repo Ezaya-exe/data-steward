@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from tests.helpers.oracle import clean_frame, compare_frames
+
+from dqs.bench.oracle import clean_frame, compare_frames
 
 PROJECT = Path(__file__).resolve().parents[2]
 COLUMNS = ["order_id", "customer_id", "order_ts", "status", "total_amount"]
@@ -103,18 +104,21 @@ def test_missing_key_column_is_reported() -> None:
     assert "key column 'order_id'" in result.detail
 
 
-def test_no_production_module_imports_the_oracle() -> None:
-    offenders = []
-    for path in (PROJECT / "src" / "dqs").rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        if "tests.helpers" in text or "helpers.oracle" in text or "oracle" in text.lower():
-            offenders.append(str(path.relative_to(PROJECT)))
-    assert offenders == []
+def test_bench_package_is_the_only_oracle_location() -> None:
+    """The answer key must not live behind production agents or verifiers."""
+    project = Path(__file__).resolve().parents[2]
+    legacy = project / "tests" / "helpers" / "oracle.py"
+    assert not legacy.exists()
+    for relative in ("agents", "verify", "workflow", "publish", "tools", "checks"):
+        for path in (project / "src" / "dqs" / relative).rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            assert "dqs.bench" not in text, path
+            assert "oracle" not in text.lower(), path
 
 
 @pytest.mark.parametrize("table", ["stg_orders; drop table x", "StgOrders", "stg_orders--"])
 def test_oracle_rejects_unsafe_identifiers_before_touching_the_db(table: str) -> None:
-    from tests.helpers import oracle
+    from dqs.bench import oracle
 
     with pytest.raises(ValueError, match="unsafe"):
         oracle.compare_patched_staging(

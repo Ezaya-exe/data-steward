@@ -43,6 +43,8 @@ from dqs.agents.investigator import NODE_NAME, investigate
 from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.smoke import run_smoke
 from dqs.agents.steps import DbStepSink
+from dqs.bench.report import load_run_file, render_markdown
+from dqs.bench.runner import RESULTS_DIR, BenchOptions, run_benchmark
 from dqs.checks.engine import CheckEngine
 from dqs.config import Settings, load_settings
 from dqs.contracts import generation as contracts_generation
@@ -78,6 +80,7 @@ incidents_app = typer.Typer(help="Inspect recorded incidents.")
 incident_app = typer.Typer(help="Run one incident workflow node by hand (Phase 4+).")
 llm_app = typer.Typer(help="LLM provider checks (Phase 4).")
 publish_app = typer.Typer(help="Preview verified fixes locally (dry-run only, no GitHub call).")
+bench_app = typer.Typer(help="Fault-injection benchmark: scenarios, runs and reports (Phase 8).")
 app.add_typer(db_app, name="db")
 app.add_typer(dev_app, name="dev")
 app.add_typer(sim_app, name="sim")
@@ -89,6 +92,7 @@ app.add_typer(incidents_app, name="incidents")
 app.add_typer(incident_app, name="incident")
 app.add_typer(llm_app, name="llm")
 app.add_typer(publish_app, name="publish")
+app.add_typer(bench_app, name="bench")
 
 console = Console()
 
@@ -1284,6 +1288,90 @@ def test_int() -> None:
 def check() -> None:
     """Full quality gate: lint + test + test-int."""
     raise typer.Exit(devmod.check())
+
+
+@bench_app.command("run")
+def bench_run(
+    split: str = typer.Option("dev", "--split", help="dev | holdout | all."),
+    model: str | None = typer.Option(
+        None, "--model", help="Model name; defaults to LLM_MODEL_BENCH."
+    ),
+    limit: int | None = typer.Option(None, "--limit", help="Run at most N scenarios."),
+    ids: str | None = typer.Option(None, "--ids", help="Comma-separated scenario ids."),
+    resume: Annotated[
+        Path | None, typer.Option("--resume", help="Continue a results JSON file.")
+    ] = None,
+    no_dbt: bool = typer.Option(False, "--no-dbt", help="Skip the dbt build after loading."),
+    daily_token_cap: int = typer.Option(180_000, "--daily-token-cap"),
+    tpm_limit: int = typer.Option(8_000, "--tpm-limit"),
+    pause: float = typer.Option(1.0, "--pause", help="Seconds between scenarios."),
+    confirm_holdout: bool = typer.Option(
+        False, "--confirm-holdout", help="Required to run the reporting-only holdout split."
+    ),
+    llm_retry_max_wait: float = typer.Option(
+        90.0, "--llm-retry-max-wait", help="Total seconds a per-minute 429 may spend retrying."
+    ),
+    results_dir: Annotated[Path | None, typer.Option("--results-dir")] = None,
+) -> None:
+    """Run fault-injection scenarios against one model (dry-run publishing)."""
+    settings = load_settings()
+    options = BenchOptions(
+        model=model or settings.llm_model_bench,
+        split=split,
+        limit=limit,
+        ids=[item for item in (ids or "").split(",") if item.strip()] or None,
+        resume=resume,
+        no_dbt=no_dbt,
+        daily_token_cap=daily_token_cap,
+        tpm_limit=tpm_limit,
+        pause_seconds=pause,
+        confirm_holdout=confirm_holdout,
+        llm_retry_max_wait_seconds=llm_retry_max_wait,
+        results_dir=(results_dir or RESULTS_DIR),
+    )
+    try:
+        run, path = run_benchmark(
+            settings, options, progress=lambda message: console.print(message)
+        )
+    except DqsError as exc:
+        _fail(exc)
+    aggregates = run.aggregates()
+    console.print(
+        f"[green]ok[/green] {len(run.scenarios)} scenario(s) written to {path}\n"
+        f"  detection={aggregates.overall.detection_recall} "
+        f"rc_category={aggregates.overall.rc_category_accuracy} "
+        f"resolution={aggregates.overall.resolution_accuracy} "
+        f"fp_rate={aggregates.overall.false_positive_rate}"
+    )
+    if run.metadata.stop_reason:
+        console.print(f"[yellow]stopped:[/yellow] {run.metadata.stop_reason}")
+        if run.metadata.resume_hint:
+            console.print(f"resume: {run.metadata.resume_hint}")
+
+
+@bench_app.command("report")
+def bench_report(
+    file: Annotated[
+        Path | None, typer.Argument(help="Results JSON; default is the newest one.")
+    ] = None,
+) -> None:
+    """Print the per-kind/overall markdown report for a results file."""
+    target = file or _latest_results_file()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        run = load_run_file(payload)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        _fail(DqsError(f"could not read results file {target}: {exc}"))
+    typer.echo(render_markdown(run))
+
+
+def _latest_results_file() -> Path:
+    candidates = sorted(
+        RESULTS_DIR.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True
+    )
+    if not candidates:
+        _fail(DqsError(f"no benchmark results in {RESULTS_DIR}; run `dqs bench run` first"))
+    return candidates[0]
 
 
 def _fail(exc: DqsError) -> NoReturn:

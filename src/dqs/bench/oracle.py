@@ -1,21 +1,24 @@
-"""Test-only oracle: compare a patched sandbox with clean generated data.
+"""Benchmark answer-key oracle: compare a patched sandbox with clean data.
 
-Why this exists (Phase 5b): the verifier can pass a fix that clears the check and
-preserves rows but still writes wrong values (for example casting every amount
-to the same number). The benchmark's ground truth is the generator, which is a
-pure function of ``(seed, date)``; this module rebuilds the patched staging
-model with the real dbt project and compares its fault-batch rows with that
-clean frame.
+Why this exists (Phase 5b, moved here in Phase 8a): the verifier can pass a fix
+that clears the check and preserves rows but still writes wrong values (for
+example casting every amount to the same number). The benchmark's ground truth
+is the generator, which is a pure function of ``(seed, date)``; this module
+rebuilds the patched staging model with the real dbt project and compares its
+fault-batch rows with that clean frame.
 
-This is deliberately **not** production code. The fixer and verifier must not
-be able to see the answer key (AGENTS.md §7.9: no special-casing fault names):
-a test asserts that nothing under ``src/dqs`` imports this module.
+This is deliberately **not** importable by the agent/verification/publishing
+code: the fixer and verifier must not be able to see the answer key (AGENTS.md
+§7.9: no special-casing fault names). `tests/unit/test_bench_isolation.py`
+asserts that nothing under ``agents/``, ``verify/``, ``workflow/``, ``publish/``,
+``tools/`` or ``checks/`` imports this package.
 """
 
 from __future__ import annotations
 
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Final
 
@@ -52,7 +55,7 @@ class OracleResult:
     detail: str = ""
 
 
-def clean_frame(raw_table: str, fault_date, seed: int) -> pd.DataFrame:
+def clean_frame(raw_table: str, fault_date: date, seed: int) -> pd.DataFrame:
     """The generator's clean frame for the fault date (the answer key)."""
     tables = generator.tables_for_date(fault_date, seed)
     return tables[raw_table].copy()
@@ -140,7 +143,7 @@ def compare_patched_staging(
     plan: FixPlan,
     *,
     engine: Engine,
-    fault_date,
+    fault_date: date,
     seed: int,
     raw_table: str = "orders",
     staging_table: str = "stg_orders",

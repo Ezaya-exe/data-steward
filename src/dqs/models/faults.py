@@ -51,6 +51,10 @@ class GroundTruth(_Strict):
     expected_category: RootCauseCategory
     expected_resolution: ResolutionType
     fix_shape: str | None = None  # §6 "expected fix shape" (PR faults only)
+    # The benchmark's answer key for `RootCause.affected_columns` (Phase 8a).
+    # An empty list means the fault is not column-scoped (F6/F8/F9), so column
+    # scoring is not applicable rather than wrong.
+    acceptable_columns: list[str] = Field(default_factory=list)
 
     @field_validator("column")
     @classmethod

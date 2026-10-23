@@ -25,10 +25,10 @@ import sqlalchemy as sa
 from pydantic import ValidationError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from tests.helpers import oracle
 
 from dqs import db as dbmod
 from dqs import dbt_run
+from dqs.bench import oracle
 from dqs.config import Settings
 from dqs.models.enums import RootCauseCategory
 from dqs.models.fix import Edit, FixPlan

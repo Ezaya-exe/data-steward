@@ -22,6 +22,35 @@ LLM_PROVIDERS = frozenset(
 )
 GITHUB_MODES = frozenset({"dry_run", "live"})
 
+# Benchmark cost estimate, USD per million tokens (input, output), matched by a
+# case-insensitive model-name prefix. These are planning prices, not invoices;
+# `Settings` overrides them when a provider changes its list price. An unknown
+# model costs 0.0 and is labelled as unpriced in the results metadata.
+LLM_PRICE_TABLE: dict[str, tuple[float, float]] = {
+    "claude-sonnet-4": (3.0, 15.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-haiku": (1.0, 5.0),
+    "claude-opus": (15.0, 75.0),
+    "gpt-4o-mini": (0.15, 0.6),
+    "gpt-4o": (2.5, 10.0),
+    "gpt-5": (1.25, 10.0),
+    "o3": (2.0, 8.0),
+    "deepseek": (0.27, 1.1),
+    "gemini-2.5-flash": (0.3, 2.5),
+    "gemini": (0.3, 2.5),
+    "kimi": (0.6, 2.5),
+    "glm": (0.6, 2.2),
+}
+
+
+def price_for_model(model: str) -> tuple[float, float] | None:
+    """(input, output) USD per million tokens, or None when unpriced."""
+    normalized = model.strip().lower()
+    for prefix in sorted(LLM_PRICE_TABLE, key=len, reverse=True):
+        if normalized.startswith(prefix):
+            return LLM_PRICE_TABLE[prefix]
+    return None
+
 
 class Settings(BaseSettings):
     """All configuration, validated once at load time.
@@ -86,6 +115,11 @@ class Settings(BaseSettings):
     llm_retry_max_wait_seconds: float = 30.0
     llm_retry_base_seconds: float = 1.0
 
+    # Benchmark price overrides (USD per million tokens). Empty means "use
+    # LLM_PRICE_TABLE"; both set and 0.0 is an explicit free/local model.
+    llm_input_price_per_mtok: float | None = None
+    llm_output_price_per_mtok: float | None = None
+
     # Observability (Phase 9, optional)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -130,6 +164,25 @@ class Settings(BaseSettings):
             port=self.pg_port,
             database=self.pg_database,
         )
+
+
+def estimate_cost_usd(
+    model: str, tokens_in: int, tokens_out: int, settings: Settings | None = None
+) -> float:
+    """Estimated USD cost from the price table (or explicit Settings overrides).
+
+    Returns 0.0 for an unpriced model; the results metadata records whether the
+    price was known so a 0.0 is never silently read as "free".
+    """
+    if settings is not None and settings.llm_input_price_per_mtok is not None:
+        price_in = float(settings.llm_input_price_per_mtok)
+        price_out = float(settings.llm_output_price_per_mtok or 0.0)
+    else:
+        tuple_price = price_for_model(model)
+        if tuple_price is None:
+            return 0.0
+        price_in, price_out = tuple_price
+    return (max(0, tokens_in) * price_in + max(0, tokens_out) * price_out) / 1_000_000.0
 
 
 @lru_cache(maxsize=1)
