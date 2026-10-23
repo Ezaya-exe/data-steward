@@ -143,14 +143,14 @@ def _load_table(
         for column in headers:
             if column not in existing:
                 conn.exec_driver_sql(f'ALTER TABLE {_qualified(table)} ADD COLUMN "{column}" text')
-    rows = _row_dicts(frame, batch_id, arrived)
     # only columns present in this batch are inserted; absent ones stay NULL
     columns = [*headers, *SYSTEM_COLUMNS]
-    if rows:
-        sql = _insert_sql(table, columns)
-        for chunk in _chunks(rows, 1000):
-            conn.execute(text(sql), chunk)
-    return len(rows)
+    if len(frame):
+        # COPY is the bulk path (Phase 8a): one round trip per table instead of
+        # one parameterised INSERT per row. It writes the exact same text
+        # values; `_row_values` keeps the conversion rules identical.
+        _copy_rows(conn, table, columns, _row_values(frame, batch_id, arrived))
+    return len(frame)
 
 
 def _create_table_sql(table: str, headers: Sequence[str]) -> str:
@@ -160,34 +160,46 @@ def _create_table_sql(table: str, headers: Sequence[str]) -> str:
     return f"CREATE TABLE {_qualified(table)} ({', '.join(parts)})"
 
 
-def _insert_sql(table: str, columns: Sequence[str]) -> str:
-    columns_sql = ", ".join(f'"{c}"' for c in columns)
-    placeholders = ", ".join(f":{c}" for c in columns)
-    return f"INSERT INTO {_qualified(table)} ({columns_sql}) VALUES ({placeholders})"
-
-
-def _row_dicts(
+def _row_values(
     frame: pd.DataFrame,
     batch_id: str,
     arrived: dt.datetime,
-) -> list[dict[str, Any]]:
-    columns = list(frame.columns)
-    rows: list[dict[str, Any]] = []
+) -> Iterator[tuple[Any, ...]]:
+    """Yield COPY tuples in the batch header's column order.
+
+    Every business value is stored as TEXT, exactly as the previous
+    parameterised INSERT did; NULL/NaN map to SQL NULL. The two loader-owned
+    system columns are appended last.
+    """
     for record in frame.itertuples(index=False, name=None):
-        row: dict[str, Any] = {
-            column: (
-                None
-                if value is None or (isinstance(value, float) and np.isnan(value))
-                else str(value)
-            )
-            for column, value in zip(columns, record, strict=True)
-        }
-        row["_batch_id"] = batch_id
-        row["_loaded_at"] = arrived
-        rows.append(row)
-    return rows
+        values: list[Any] = []
+        for value in record:
+            values.append(None if _is_null(value) else str(value))
+        values.append(batch_id)
+        values.append(arrived)
+        yield tuple(values)
 
 
-def _chunks(rows: list[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
-    for start in range(0, len(rows), size):
-        yield rows[start : start + size]
+def _is_null(value: Any) -> bool:
+    if value is None:
+        return True
+    return isinstance(value, float) and np.isnan(value)
+
+
+def _copy_rows(
+    conn: Any,
+    table: str,
+    columns: Sequence[str],
+    rows: Iterator[tuple[Any, ...]],
+) -> None:
+    """COPY FROM STDIN on the same connection/transaction as the batch row.
+
+    psycopg3 exposes the live driver connection through SQLAlchemy; using it
+    directly keeps the atomic per-batch transaction intact (no second commit).
+    """
+    raw = conn.connection.driver_connection
+    columns_sql = ", ".join(f'"{column}"' for column in columns)
+    statement = f"COPY {_qualified(table)} ({columns_sql}) FROM STDIN"
+    with raw.cursor() as cursor, cursor.copy(statement) as copy:
+        for row in rows:
+            copy.write_row(row)

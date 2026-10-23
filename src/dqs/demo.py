@@ -19,16 +19,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from sqlalchemy import URL, Engine, create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import Engine, text
 
 from dqs import db as dbmod
+from dqs import fast_reset
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
 from dqs.config import Settings
 from dqs.contracts import generation as contracts_generation
 from dqs.contracts import store as contracts_store
-from dqs.errors import DatabaseError, DqsError
+from dqs.errors import DqsError
 from dqs.models.faults import FaultSpec
 from dqs.models.state import WorkflowOutcome
 from dqs.publish.base import PublicationKind
@@ -77,54 +77,17 @@ class DemoResult:
     created_incidents: list[uuid.UUID]
 
 
-def ensure_demo_database(settings: Settings, *, reset: bool) -> bool:
-    """Create/reset `dqs_demo` from `template0`; return True when recreated.
+def ensure_demo_database(settings: Settings, *, reset: bool = False) -> bool:
+    """Create `dqs_demo` by cloning the cached clean baseline.
 
-    Runs from the `postgres` maintenance database (CREATE/DROP DATABASE cannot
-    run inside a transaction, hence AUTOCOMMIT). Never accepts a database name
-    from the caller: the constant is the whole point of the safety boundary.
+    Phase 8a: the 30-day seed is no longer rebuilt for a demo. `dqs_template`
+    is built once (and rebuilt when generator/contracts/dbt models change), then
+    `dqs_demo` is always a fresh `CREATE DATABASE ... TEMPLATE` clone. `reset`
+    is kept for CLI compatibility; a demo run never reuses a dirty database.
     """
-    admin_url = URL.create(
-        "postgresql+psycopg",
-        username=settings.pg_user,
-        password=settings.pg_password,
-        host=settings.pg_host,
-        port=settings.pg_port,
-        database="postgres",
-    )
-    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
-    try:
-        with admin.connect() as conn:
-            exists = bool(
-                conn.execute(
-                    text("SELECT 1 FROM pg_database WHERE datname = :name"),
-                    {"name": DEMO_DB},
-                ).scalar()
-            )
-            if exists and reset:
-                conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{DEMO_DB}" WITH (FORCE)')
-                exists = False
-            if not exists:
-                conn.exec_driver_sql(f'CREATE DATABASE "{DEMO_DB}" TEMPLATE template0')
-                created = True
-            else:
-                created = False
-    except SQLAlchemyError as exc:
-        raise DatabaseError(f"could not create/reset the {DEMO_DB} database: {exc}") from exc
-    finally:
-        admin.dispose()
-    return created
-
-
-def _seed_and_approve(settings: Settings, *, days: int) -> None:
-    results = sim_pipeline.seed_baseline(settings, days, settings.dqs_seed)
-    failed = [item for item in results if item["dbt_exit"] not in (None, 0)]
-    if failed:
-        first = failed[0]
-        raise DqsError(
-            f"baseline dbt build failed on {first['date']} (exit {first['dbt_exit']}); "
-            "the demo cannot continue from an unhealthy baseline"
-        )
+    _ = reset
+    fast_reset.clone_template(settings, DEMO_DB)
+    return True
 
 
 def _contracts_dir() -> Path:
@@ -219,16 +182,8 @@ def run_demo(
     notify = progress if progress is not None else (lambda _message: None)
 
     demo_settings = settings.model_copy(update={"pg_database": DEMO_DB})
-    notify(f"preparing {DEMO_DB} (reset={reset})")
-    recreated = ensure_demo_database(settings, reset=reset)
-    if recreated:
-        dbmod.init_database(demo_settings)
-    else:
-        # A reused demo database is still a clean story: drop+recreate schemas.
-        dbmod.reset_database(demo_settings)
-
-    notify(f"seeding {BASELINE_DAYS} baseline days and building dbt models")
-    _seed_and_approve(demo_settings, days=BASELINE_DAYS)
+    notify(f"preparing {DEMO_DB} from the cached baseline template")
+    ensure_demo_database(settings, reset=reset)
     notify("approving generated contracts")
     contracts = _approve_contracts(demo_settings)
 

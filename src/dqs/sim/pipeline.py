@@ -24,7 +24,13 @@ BASELINE_START: Final = generator.BASELINE_START_DATE
 def seed_baseline(
     settings: Settings, days: int, seed: int, run_dbt: bool = True
 ) -> list[dict[str, Any]]:
-    """Load ``days`` clean baseline batches (initial dimension load on day 1)."""
+    """Load ``days`` clean baseline batches (initial dimension load on day 1).
+
+    Phase 8a: all days are loaded first and dbt runs **once** at the end. The
+    old loop rebuilt every model after every day (30 full builds for the 30-day
+    baseline); the warehouse contents are identical because a full dbt build is
+    a whole-table snapshot of the same raw rows (DECISIONS 120).
+    """
     results: list[dict[str, Any]] = []
     engine = dbmod.make_rw_engine(settings)
     try:
@@ -32,14 +38,17 @@ def seed_baseline(
             business_date = BASELINE_START + dt.timedelta(days=index)
             batch = generator.tables_for_date(business_date, seed)
             counts = loader.load_batch(engine, business_date, batch)
-            dbt_code: int | None = None
-            if run_dbt:
-                dbt_code, _out = dbt_run.run_dbt_build(
-                    settings, target="dev", batch_id=loader.batch_id_for_date(business_date)
-                )
-            results.append({"date": business_date, "rows": counts, "dbt_exit": dbt_code})
+            results.append({"date": business_date, "rows": counts, "dbt_exit": None})
     finally:
         engine.dispose()
+    if run_dbt and results:
+        last_date = results[-1]["date"]
+        dbt_code, _out = dbt_run.run_dbt_build(
+            settings, target="dev", batch_id=loader.batch_id_for_date(last_date)
+        )
+        # The build covers every day; report it once (on the last entry) so the
+        # CLI summary and the failure check keep their old shape.
+        results[-1]["dbt_exit"] = dbt_code
     return results
 
 
