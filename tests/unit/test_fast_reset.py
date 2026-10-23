@@ -113,16 +113,19 @@ def test_clone_refuses_the_warehouse_as_a_target() -> None:
 def test_demo_always_clones_the_cached_template(monkeypatch: pytest.MonkeyPatch) -> None:
     from dqs import demo
 
-    calls: list[tuple[str, str]] = []
+    calls: list[str] = []
 
     def fake_clone(settings: Settings, target: str) -> None:
-        calls.append((settings.pg_database, target))
+        _ = settings
+        calls.append(target)
 
     monkeypatch.setattr(demo.fast_reset, "clone_template", fake_clone)
     assert demo.ensure_demo_database(SETTINGS) is True
     assert demo.ensure_demo_database(SETTINGS, reset=True) is True
     # The demo never reuses a dirty database: each call is a fresh clone.
-    assert calls == [("warehouse", demo.DEMO_DB), ("warehouse", demo.DEMO_DB)]
+    # clone_template's source is fast_reset.TEMPLATE_DB, never the configured
+    # warehouse (Settings only supplies the admin connection).
+    assert calls == [demo.DEMO_DB, demo.DEMO_DB]
 
 
 def test_seed_baseline_loads_every_day_then_builds_dbt_once(
