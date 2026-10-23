@@ -41,6 +41,10 @@ class LLMError(DqsError):
     """The LLM provider is unavailable, misconfigured, or returned unusable output."""
 
 
+class DailyQuotaExceeded(LLMError):
+    """The provider's per-day quota is exhausted; the benchmark must stop cleanly."""
+
+
 class InvestigatorError(DqsError):
     """The investigator could not run or could not produce a valid RootCause."""
 

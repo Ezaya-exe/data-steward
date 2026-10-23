@@ -19,11 +19,12 @@ from dqs.agents.llm import (
     LLMClient,
     RetryRecord,
     get_llm,
+    is_daily_quota_error,
     redact_secrets,
 )
 from dqs.agents.smoke import run_smoke
 from dqs.config import Settings
-from dqs.errors import BudgetExceeded, ConfigError
+from dqs.errors import BudgetExceeded, ConfigError, DailyQuotaExceeded
 
 
 @pytest.fixture
@@ -336,6 +337,43 @@ def test_retry_after_beyond_the_total_wait_budget_is_not_slept() -> None:
     assert slept == []
     assert client.calls[0].error is not None
     assert "retry budget" in client.calls[0].error
+
+
+class _QuotaError(_ProviderError):
+    """A daily-quota 429: same status as a rate limit, different meaning."""
+
+    def __init__(self, message: str = "You exceeded your current quota, per day limit") -> None:
+        super().__init__(429)
+        self.args = (message,)
+
+
+def test_daily_quota_429_stops_immediately_without_retry() -> None:
+    runnable = _FlakyRunnable([_QuotaError()])
+    slept: list[float] = []
+    client = _flaky_client(runnable, max_retries=3, sleep=slept.append)
+    with pytest.raises(DailyQuotaExceeded, match="daily LLM quota exhausted"):
+        client.invoke("hello")
+    assert runnable.calls == 1
+    assert slept == []
+    assert len(client.calls) == 1
+    assert client.calls[0].error is not None
+    assert "quota" in client.calls[0].error
+
+
+def test_is_daily_quota_error_distinguishes_rate_limits() -> None:
+    assert is_daily_quota_error(_QuotaError("insufficient_quota: quota exceeded"))
+    assert not is_daily_quota_error(_ProviderError(429))
+    assert not is_daily_quota_error(_QuotaError("rate limit reached for requests"))
+
+
+def test_daily_quota_marker_is_not_retried_even_with_wait_room() -> None:
+    runnable = _FlakyRunnable([_QuotaError("daily limit reached"), _QuotaError("daily limit")])
+    slept: list[float] = []
+    client = _flaky_client(runnable, max_retries=3, max_retry_wait_seconds=999, sleep=slept.append)
+    with pytest.raises(DailyQuotaExceeded):
+        client.invoke("hello")
+    assert runnable.calls == 1
+    assert slept == []
 
 
 def test_smoke_runs_all_four_probes_on_fake() -> None:

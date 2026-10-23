@@ -18,10 +18,12 @@ Safety boundaries inherited from Phase 4a:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
@@ -45,6 +47,15 @@ PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "investigator.md"
 MAX_CONTEXT_SUMMARY = 500
 MAX_OBSERVATION_CHARS = 280
 MAX_PARTIAL_SUMMARY_CHARS = 1500
+
+# The final-answer tool the model may call by name (Phase 8a). It has the same
+# schema as the `submit_root_cause` fallback; only the name differs because
+# real OpenAI-compatible models commonly finish by calling `RootCause`.
+FINAL_TOOL_NAME = "RootCause"
+SUBMIT_TOOL_NAME = "submit_root_cause"
+# The incident record is supplied to the model in the initial HumanMessage, so
+# citing it is a real provenance source even though no tool was invoked.
+INCIDENT_PROVENANCE_TOOLS = frozenset({"incident", "incident_record"})
 
 
 class InvestigationResult(BaseModel):
@@ -186,7 +197,11 @@ def _retry_step_hook(sink: StepSink) -> Any:
 
 
 def filter_evidence(
-    root_cause: RootCause, called_tools: set[str], sink: StepSink | None = None
+    root_cause: RootCause,
+    called_tools: set[str],
+    sink: StepSink | None = None,
+    *,
+    extra_provenance: set[str] | frozenset[str] = INCIDENT_PROVENANCE_TOOLS,
 ) -> RootCause:
     """Keep only evidence whose tool was actually called in this run.
 
@@ -194,11 +209,15 @@ def filter_evidence(
     prompt forbids it, but the guard is deterministic: drop the item, log why,
     and keep the rest. An empty evidence list is honest; a fabricated one is
     not.
+
+    The incident record is part of the initial prompt, so `incident` and
+    `incident_record` are valid provenance sources without a tool call.
     """
+    allowed = set(called_tools) | set(extra_provenance)
     kept: list[EvidenceItem] = []
     dropped: list[EvidenceItem] = []
     for item in root_cause.evidence:
-        if item.tool in called_tools:
+        if item.tool in allowed:
             kept.append(item)
         else:
             dropped.append(item)
@@ -277,11 +296,126 @@ def _final_native(client: LLMClient, messages: list[Any]) -> RootCause:
         raise InvestigatorError(f"structured output did not validate as RootCause: {exc}") from exc
 
 
+def _final_root_cause_tool() -> StructuredTool:
+    """The in-loop final-answer tool, named `RootCause` (Phase 8a).
+
+    Same schema as the out-of-loop `submit_root_cause` fallback. Registering it
+    means a model that decides to finish by calling `RootCause` makes a call the
+    provider/client accepts instead of a 400 `tool_use_failed` error.
+    """
+    return StructuredTool.from_function(
+        func=_submit_root_cause,
+        name=FINAL_TOOL_NAME,
+        description=(
+            "Submit the final RootCause. Call this exactly once when the investigation is finished."
+        ),
+        args_schema=RootCause,
+    )
+
+
+def _exception_body(exc: BaseException) -> dict[str, Any] | None:
+    """Best-effort provider error body, without importing any provider SDK."""
+    candidates: list[Any] = [getattr(exc, "body", None)]
+    response = getattr(exc, "response", None)
+    if response is not None:
+        candidates.append(response)
+        json_reader = getattr(response, "json", None)
+        if callable(json_reader):
+            try:
+                candidates.append(json_reader())
+            except Exception:
+                pass
+        candidates.append(getattr(response, "text", None))
+    if exc.args:
+        candidates.append(exc.args[0])
+    candidates.append(str(exc))
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            return candidate
+        if isinstance(candidate, str) and candidate.strip().startswith("{"):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def failed_generation(exc: BaseException) -> str | None:
+    """Extract `failed_generation` from a provider `tool_use_failed` error."""
+    body = _exception_body(exc)
+    if body is None:
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        code = str(error.get("code") or "").lower()
+        payload = error.get("failed_generation")
+        if payload is None:
+            payload = body.get("failed_generation")
+        if payload is None:
+            return None
+        if code and code not in {"tool_use_failed", "invalid_tool_call"}:
+            return None
+        if isinstance(payload, dict):
+            return json.dumps(payload)
+        return str(payload)
+    payload = body.get("failed_generation")
+    return None if payload is None else str(payload)
+
+
+_JSON_START_RE: Final = re.compile(r"[\[{]")
+
+
+def parse_failed_generation(raw: str) -> RootCause | None:
+    """Parse a provider's `failed_generation` text into a validated RootCause.
+
+    Accepts the shapes observed from OpenAI-compatible gateways: a bare JSON
+    object, `{"name": ..., "arguments": {...}}`, a `<function=...>{...}</function>`
+    wrapper, or free text containing one JSON object. Returns None when no
+    candidate validates; the caller then falls back to another model call.
+    """
+    candidates: list[Any] = []
+    text = raw.strip()
+    parsed = _try_json(text)
+    if parsed is not None:
+        candidates.append(parsed)
+    for match in re.finditer(r"<function[^>]*>(.*?)</function>", text, re.DOTALL):
+        inner = _try_json(match.group(1).strip())
+        if inner is not None:
+            candidates.append(inner)
+    for match in _JSON_START_RE.finditer(text):
+        inner = _try_json(text[match.start() :])
+        if inner is not None:
+            candidates.append(inner)
+            break
+
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            for key in ("arguments", "parameters", "args"):
+                value = candidate.get(key)
+                if isinstance(value, dict):
+                    candidate = value
+                    break
+        try:
+            return RootCause.model_validate(candidate)
+        except ValidationError:
+            continue
+    return None
+
+
+def _try_json(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
 def _final_submit_tool(client: LLMClient, messages: list[Any]) -> RootCause:
     """Fallback channel: a single `submit_root_cause` tool with the schema."""
     submit = StructuredTool.from_function(
         func=_submit_root_cause,
-        name="submit_root_cause",
+        name=SUBMIT_TOOL_NAME,
         description=(
             "Submit the final RootCause. Call this exactly once when the investigation is finished."
         ),
@@ -367,6 +501,8 @@ def investigate(
     budget_exceeded = False
     model_failed = False
     stop_reason = ""
+    root_cause_from_loop: RootCause | None = None
+    loop_channel = ""
 
     client.on_retry = _retry_step_hook(sink)
     client.on_call = _llm_step_hook(sink)
@@ -382,7 +518,7 @@ def investigate(
             "max_tool_calls": tracker.max_tool_calls,
             "max_tokens": tracker.max_tokens,
             "timeout_seconds": tracker.timeout_seconds,
-            "tools": sorted(by_name),
+            "tools": sorted([*by_name, FINAL_TOOL_NAME]),
         },
     )
 
@@ -390,7 +526,7 @@ def investigate(
         SystemMessage(content=system_prompt),
         HumanMessage(content=incident_context(incident)),
     ]
-    bound = client.bind_tools(registry)
+    bound = client.bind_tools([*registry, _final_root_cause_tool()])
 
     while True:
         try:
@@ -418,6 +554,28 @@ def investigate(
                 input={},
                 output={"error": error_text},
             )
+            # Phase 8a: some OpenAI-compatible gateways reject a malformed
+            # final tool call with HTTP 400 `tool_use_failed`, but the attempted
+            # answer is still in `failed_generation`. Validate that payload
+            # before spending another model call.
+            raw_generation = failed_generation(exc)
+            salvaged = parse_failed_generation(raw_generation) if raw_generation else None
+            if raw_generation is not None:
+                sink.record(
+                    kind="system",
+                    name="provider_tool_use_failed",
+                    input={
+                        "failed_generation_found": True,
+                        "failed_generation_chars": len(raw_generation),
+                    },
+                    output={
+                        "path": "salvaged" if salvaged is not None else "fallback_final_channel"
+                    },
+                )
+            if salvaged is not None:
+                root_cause_from_loop = salvaged
+                loop_channel = "failed_generation"
+                break
             # Before any evidence exists there is nothing honest to report, so
             # the caller sees the real provider failure. Afterwards the safe
             # path is to try the final-answer channel with the evidence already
@@ -432,6 +590,33 @@ def investigate(
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
+            break
+
+        final_call = next(
+            (call for call in tool_calls if str(call.get("name") or "") == FINAL_TOOL_NAME),
+            None,
+        )
+        if final_call is not None:
+            # A model that finishes by calling `RootCause` is making a valid
+            # final answer, not a tool call to execute.
+            args = final_call.get("args") or {}
+            try:
+                root_cause_from_loop = RootCause.model_validate(args)
+            except ValidationError as exc:
+                sink.record(
+                    kind="system",
+                    name="root_cause_tool_invalid",
+                    input={"error": str(exc)[:MAX_CONTEXT_SUMMARY]},
+                    output={"path": "fallback_final_channel"},
+                )
+            else:
+                loop_channel = "root_cause_tool"
+                sink.record(
+                    kind="system",
+                    name="root_cause_tool",
+                    input={"evidence_items": len(root_cause_from_loop.evidence)},
+                    output={"validated": True},
+                )
             break
 
         for call in tool_calls:
@@ -489,7 +674,16 @@ def investigate(
         if budget_exceeded:
             break
 
-    if budget_exceeded:
+    if root_cause_from_loop is not None:
+        root_cause = filter_evidence(root_cause_from_loop, set(called_tools), sink)
+        channel = loop_channel
+        sink.record(
+            kind="system",
+            name="final_channel",
+            input={"evidence_items": len(root_cause.evidence)},
+            output={"channel": channel},
+        )
+    elif budget_exceeded:
         root_cause = _unknown_result(stop_reason, observations, called_tools, incident)
         sink.record(
             kind="system",

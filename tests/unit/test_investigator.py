@@ -9,6 +9,7 @@ DB-backed prompt-injection and step-log proofs live in
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 from pathlib import Path
 from typing import Any, cast
@@ -22,10 +23,12 @@ from pydantic import BaseModel, PrivateAttr, ValidationError
 
 from dqs.agents.investigator import (
     _retry_step_hook,
+    failed_generation,
     filter_evidence,
     incident_context,
     investigate,
     load_prompt,
+    parse_failed_generation,
 )
 from dqs.agents.llm import BudgetTracker, LLMClient, RetryRecord
 from dqs.agents.steps import MemoryStepSink
@@ -123,6 +126,8 @@ class ScriptedChatModel(BaseChatModel):
     final: dict[str, Any] | None = None
     fail_structured: bool = False
     fail_loop_at: int = 0
+    loop_error: Any = None
+    loop_error_at: int = 1
     calls: int = 0
     _index: int = PrivateAttr(default=0)
     _mode: str = PrivateAttr(default="loop")
@@ -158,6 +163,8 @@ class ScriptedChatModel(BaseChatModel):
         elif self._mode == "submit":
             message = _tool_call("submit_root_cause", self.final or _root_cause(), "submit")
         else:
+            if self.loop_error is not None and self.calls >= self.loop_error_at:
+                raise self.loop_error
             if self.fail_loop_at and self.calls >= self.fail_loop_at:
                 raise RuntimeError("provider rejected a tool call to 'RootCause'")
             if self._index >= len(self.script):
@@ -348,6 +355,147 @@ def test_submit_tool_is_the_documented_fallback() -> None:
     assert result.final_channel == "submit_tool"
     assert result.root_cause.category is RootCauseCategory.SOURCE_COLUMN_RENAMED
     assert any(step.name == "final_channel_fallback" for step in sink.records)
+
+
+# --- Phase 8a: the RootCause finish tool and provider tool_use_failed salvage -----------
+
+
+class _ProviderRejection(RuntimeError):
+    """Stands in for an OpenAI-compatible 400 `tool_use_failed` response."""
+
+    def __init__(self, payload: str, *, code: str = "tool_use_failed") -> None:
+        super().__init__(f"provider rejected the tool call: {code}")
+        self.status_code = 400
+        self.body = {"error": {"code": code, "failed_generation": payload}}
+
+
+def test_root_cause_tool_finishes_in_one_call() -> None:
+    payload = _root_cause(
+        category="UPSTREAM_NULLS_INTRODUCED",
+        evidence=[{"tool": "get_contract", "finding": "status is required"}],
+    )
+    chat = ScriptedChatModel(script=[_tool_call("RootCause", payload, "final")])
+    sink = _sink()
+
+    result = investigate(
+        _incident(),
+        client=_client(chat),
+        context=_context(),
+        sink=sink,
+        budget=BudgetTracker(max_tool_calls=10, max_tokens=100_000),
+        tools=[_fake_tool()],
+    )
+
+    assert result.final_channel == "root_cause_tool"
+    assert chat.calls == 1
+    assert result.tool_calls == 0
+    assert result.root_cause.category is RootCauseCategory.UPSTREAM_NULLS_INTRODUCED
+    assert any(step.name == "root_cause_tool" for step in sink.records)
+
+
+def test_valid_failed_generation_is_salvaged_without_a_second_call() -> None:
+    payload = _root_cause(
+        category="SOURCE_TYPE_CHANGED",
+        suggested_resolution="PR",
+        evidence=[{"tool": "get_contract", "finding": "amount changed type"}],
+    )
+    chat = ScriptedChatModel(
+        script=[_tool_call("get_contract", {}, "c1")],
+        loop_error=_ProviderRejection(json.dumps(payload)),
+        final=payload,
+    )
+    sink = _sink()
+
+    result = investigate(
+        _incident(),
+        client=_client(chat),
+        context=_context(),
+        sink=sink,
+        budget=BudgetTracker(max_tool_calls=10, max_tokens=100_000),
+        tools=[_fake_tool()],
+    )
+
+    assert chat.calls == 1  # salvaged from the 400: no extra model call
+    assert result.final_channel == "failed_generation"
+    assert result.root_cause.category is RootCauseCategory.SOURCE_TYPE_CHANGED
+    step = next(step for step in sink.records if step.name == "provider_tool_use_failed")
+    assert step.output == {"path": "salvaged"}
+
+
+def test_invalid_failed_generation_falls_back_to_the_final_channel_once() -> None:
+    chat = ScriptedChatModel(
+        script=[_tool_call("get_contract", {}, "c1")],
+        loop_error=_ProviderRejection('{"not": "a root cause"}'),
+        loop_error_at=2,
+        final=_root_cause(category="DUPLICATE_RECORDS", suggested_resolution="PR"),
+    )
+    sink = _sink()
+
+    result = investigate(
+        _incident(),
+        client=_client(chat),
+        context=_context(),
+        sink=sink,
+        budget=BudgetTracker(max_tool_calls=10, max_tokens=100_000),
+        tools=[_fake_tool()],
+    )
+
+    assert chat.calls == 3  # failed loop call + one final-answer call (after the tool)
+    assert result.final_channel == "native_structured"
+    step = next(step for step in sink.records if step.name == "provider_tool_use_failed")
+    assert step.output == {"path": "fallback_final_channel"}
+
+
+def test_failed_generation_parser_accepts_gateway_shapes() -> None:
+    payload = _root_cause(category="LATE_OR_MISSING_BATCH")
+    assert failed_generation(_ProviderRejection(json.dumps(payload))) is not None
+    wrapped = f"<function=RootCause>{json.dumps(payload)}</function>"
+    assert parse_failed_generation(wrapped) is not None
+    named = json.dumps({"name": "RootCause", "arguments": payload})
+    assert parse_failed_generation(named) is not None
+    assert parse_failed_generation("not json at all") is None
+
+
+def test_incident_record_is_valid_evidence_provenance() -> None:
+    payload = _root_cause(evidence=[{"tool": "incident", "finding": "batch 20260131 is late"}])
+    chat = ScriptedChatModel(script=[_tool_call("RootCause", payload, "final")])
+    sink = _sink()
+
+    result = investigate(
+        _incident(),
+        client=_client(chat),
+        context=_context(),
+        sink=sink,
+        budget=BudgetTracker(max_tool_calls=10, max_tokens=100_000),
+        tools=[_fake_tool()],
+    )
+
+    assert [item.tool for item in result.root_cause.evidence] == ["incident"]
+    assert not any(step.name == "evidence_dropped" for step in sink.records)
+
+
+def test_root_cause_tool_evidence_for_uncalled_tools_is_still_dropped() -> None:
+    payload = _root_cause(
+        evidence=[
+            {"tool": "get_contract", "finding": "never called"},
+            {"tool": "incident_record", "finding": "from the initial prompt"},
+        ]
+    )
+    chat = ScriptedChatModel(script=[_tool_call("RootCause", payload, "final")])
+    sink = _sink()
+
+    result = investigate(
+        _incident(),
+        client=_client(chat),
+        context=_context(),
+        sink=sink,
+        budget=BudgetTracker(max_tool_calls=10, max_tokens=100_000),
+        tools=[_fake_tool()],
+    )
+
+    assert [item.tool for item in result.root_cause.evidence] == ["incident_record"]
+    dropped = next(step for step in sink.records if step.name == "evidence_dropped")
+    assert dropped.output == {"kept": 1}
 
 
 # --- step log and prompt --------------------------------------------------------------

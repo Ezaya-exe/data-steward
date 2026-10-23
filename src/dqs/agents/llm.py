@@ -38,7 +38,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from dqs.config import LLM_PROVIDERS, Settings, load_settings
-from dqs.errors import BudgetExceeded, ConfigError, LLMError
+from dqs.errors import BudgetExceeded, ConfigError, DailyQuotaExceeded, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +233,18 @@ class RetryRecord(BaseModel):
 # and can hide the real problem (AGENTS.md §7.7).
 RETRYABLE_STATUS_CODES: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
 
+# A 429 usually means "slow down" (retry after a short wait), but a provider's
+# *daily* quota is exhausted for hours: retrying cannot help and would burn the
+# benchmark's remaining budget. These markers distinguish the two (Phase 8a).
+_DAILY_QUOTA_MARKERS: Final[tuple[str, ...]] = (
+    "insufficient_quota",
+    "daily",
+    "per day",
+    "per-day",
+    "quota exceeded",
+    "exceeded your current quota",
+)
+
 
 def _as_int(value: object) -> int | None:
     """An integer status code, excluding bool (which is an int in Python)."""
@@ -273,6 +285,18 @@ def exception_status_code(exc: BaseException) -> int | None:
     if "internalserver" in name:
         return 500
     return None
+
+
+def is_daily_quota_error(exc: BaseException) -> bool:
+    """True when a provider error is an exhausted *daily* quota, not a rate limit.
+
+    Status alone is not enough (both are 429). The provider text is checked for
+    the documented quota markers; a plain "rate limit" 429 stays retryable.
+    """
+    if exception_status_code(exc) != 429:
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _DAILY_QUOTA_MARKERS)
 
 
 def retry_after_seconds(exc: BaseException) -> float | None:
@@ -465,6 +489,12 @@ class LLMClient:
             except Exception as exc:
                 error = redact_secrets(str(exc), secrets=self._secrets())
                 status = exception_status_code(exc)
+                if is_daily_quota_error(exc):
+                    # Daily quota: discard this scenario at the runner, do not
+                    # retry. The failure is still recorded so its cost is visible.
+                    reason = f"daily LLM quota exhausted: {error}"
+                    self._record_failure(started, reason, retries, messages)
+                    raise DailyQuotaExceeded(reason) from exc
                 if (
                     status is None
                     or status not in RETRYABLE_STATUS_CODES
