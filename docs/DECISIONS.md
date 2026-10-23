@@ -710,3 +710,94 @@ entry each; newest last.
      registry.** Workflow tests inject scripted read-only tools without a
      database; production still builds the real context. Supplying neither is
      an `InvestigatorError` rather than silently running without tools.
+
+120. **The 30-day baseline is loaded first and dbt runs exactly once.**
+     `sim/pipeline.seed_baseline` now issues 30 batch loads (bulk `COPY` per
+     table) and then one full `dbt build`; previously every day triggered a
+     whole-warehouse build. Measured on 2026-10-23: old path 142.01 s (30
+     builds), split parts generate 0.17 s + load 7.44 s + one build 5.41 s; the
+     new cold template build measured 10.30 s total (load 4.48 s, dbt 5.82 s;
+     run-to-run load varies with filesystem cache). The raw/dq contents are
+     byte-identical: `tests/integration/test_bench_fast_reset.py` compares per-table
+     and set checksums with the pre-refactor values captured on 2026-10-23
+     (`raw.customers 22781d...`, `raw.products fbdd13...`, `raw.orders 1f4aba...`,
+     `raw.order_items 0a9727...`, `raw.payments b40cc4...`, `dq.batches c73745...`,
+     `dq.batch_tables ccf230...`, set hash `2e3a46...`).
+121. **The clean baseline is cached in `dqs_template`, cloned by demo/bench,
+     and invalidated by content, not by a flag.** `fast_reset.content_hash`
+     covers `sim/generator.py`, every `contracts/*.yml`, every file under the
+     dbt `models/` and `macros/` trees, and `dbt_project.yml`; paths are hashed
+     too, so a rename invalidates the cache. The hash, seed, day count, build
+     timings and row counts live in `dq.template_meta` inside the template.
+     `ensure_template` reads that row and rebuilds only when it differs (or
+     `force=True`); consumers never pass `--force`. `dqs_demo` and every
+     benchmark scenario are `CREATE DATABASE ... TEMPLATE dqs_template` clones,
+     so the dev warehouse is never read, written, dropped or used as a source.
+     Database names are restricted to `^dqs_[a-z0-9_]+$`, and `warehouse`,
+     `postgres`, `template0/1` and `dqs_template` are protected.
+122. **The benchmark catalogue is code, not database rows: 53 faults + 6
+     controls, with a 30.2% holdout split.** Every `GroundTruth` is produced by
+     applying the real injector to the clean 2026-01-31 batch, then annotated
+     with `acceptable_columns`; the answer key therefore cannot drift from the
+     mutation. The catalogue includes all ten kinds and the documented
+     variants (nulls 20/35/60%, duplicates 3/8/15%, scale x100/x1000). All F7
+     (`scale_shift`) and F9 (`missing_table`) cases are holdout, plus at least
+     one variant of every other kind; the six clean controls stay in `dev`.
+     `catalogue_problems()` asserts these structural rules in `pytest`.
+123. **Scoring has explicit denominators and no LLM judge.** Detection,
+     root-cause category, column set and resolution are scored over fault
+     scenarios; fix-validity and semantic correctness over PR-expected
+     scenarios; false positives over controls. A scenario that errored stays in
+     every denominator as a miss (dropping it would inflate the score).
+     `rc_columns_correct` is `None` (not applicable) for F6/F8/F9, and exact set
+     equality over `acceptable_columns` otherwise; table prefixes are
+     normalized (`raw.`/`staging.`/`marts.`) and comparisons are
+     case-insensitive. `verified_but_wrong` is verifier-passed **and**
+     oracle-failed. The oracle now lives in `dqs/bench/oracle.py`; an isolation
+     test asserts that agent/verify/workflow/publish/tool/check modules never
+     reference `dqs.bench`.
+124. **The runner is sequential and quota-aware.** Each scenario clones the
+     template, loads the fault on 2026-01-31 (dbt build after load unless
+     `--no-dbt`, recorded in metadata), monitors, runs the workflow with
+     `auto_approve=True` and `GITHUB_MODE=dry_run` (live mode is refused), scores
+     and drops the database in `finally`. Results are rewritten after every
+     scenario; resume skips `error is None` records, refuses a different
+     model/provider/split, and a non-quota error is recorded, never dropped. A
+     local daily token cap (default 180,000) stops *before* the next scenario
+     with a state + `--resume` hint. A provider daily-quota 429 is not retried:
+     the current scenario is discarded (not scored) and the run stops so it can
+     be resumed; per-minute 429s are retried with the configured total wait
+     (default 90 s, recorded in metadata). A sliding one-minute `TokenThrottle`
+     (default 8,000 TPM) spaces scenarios, and a single model call above 6,000
+     input tokens prints a compaction warning.
+125. **Cost is an estimate from a config price table, and unknown models are
+     marked unpriced.** `LLM_PRICE_TABLE` matches model names by
+     case-insensitive prefix (longest first); `Settings.llm_input_price_per_mtok`
+     / `llm_output_price_per_mtok` override it for a provider price change.
+     Unpriced models report 0.0 and `priced_model=false` in the results
+     metadata, so a zero is never silently read as "free". Tokens include every
+     recorded call, including failed retry attempts; a provider failure that
+     returns no usage still contributes zero tokens (unchanged DECISIONS 76).
+126. **`RootCause` is also a finish tool, and a provider
+     `tool_use_failed` payload is salvaged before another call.** The
+     investigator binds a typed `RootCause` tool in addition to the read-only
+     registry and `submit_root_cause`. A model that ends the loop with that tool
+     is making a final answer, not executing a tool. On an OpenAI-compatible
+     400 `tool_use_failed`, the `failed_generation` text is parsed (JSON,
+     `<function=...>` wrappers, embedded object), validated as `RootCause`, and
+     used with no extra model call when valid; when invalid, the existing final
+     channel runs once more, and `dq.agent_steps` records
+     `provider_tool_use_failed` with `salvaged` or `fallback_final_channel`.
+     `incident` and `incident_record` are accepted as evidence provenance (they
+     were already read-only tools), and uncalled tools are still dropped from
+     evidence. The benchmark-freezing baseline is `HARNESS_VERSION=8a.1` with
+     investigator prompt `21f872c8...` and fixer prompt `e22cd76a...`; no prompt
+     wording changed in Phase 8a.
+127. **Holdout is reporting-only and provenance is explicit.** `--split
+     holdout` requires `--confirm-holdout`; a run records whether the prompt
+     hashes changed since the newest earlier `dev` results file and names that
+     file. Results are one model/provider per file (`--resume` refuses a
+     mismatch), and metadata stores model, provider, date, git SHA, harness
+     version, prompt hashes and a whitelisted non-secret settings snapshot.
+     `--repeats` (mentioned in ARCHITECTURE 14/15 as future variance work) is
+     not part of Phase 8a.
