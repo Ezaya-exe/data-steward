@@ -50,7 +50,7 @@ scoring, and the quota-aware runner/CLI/report. **No real benchmark was run**
 | Non-quota errors | PASS | recorded in the result file, never dropped |
 | Cost estimate | PASS | price table + overrides; unpriced model → 0.0 + `priced_model=false` |
 | Fake-LLM end-to-end | PASS | F1/F4/F6 detected, JSON + `latest.md`, no scenario DB left |
-| Quality gates | PASS | ruff check + format clean (164 files); mypy clean (99 source files); unit **626 passed, 1 skipped**; integration **98 passed, 6 skipped in 471 s** (6 real-LLM skipped) |
+| Quality gates | PASS | ruff check + format clean (164 files); mypy clean (99 source files); unit **627 passed, 1 skipped**; integration **98 passed, 6 skipped in 471 s** (6 real-LLM skipped) |
 | No leftover databases/schemas | PASS | only `dqs_demo` (and the transient test template during the run); no `dqs_bench_*`, no `dqs_sandbox_*` |
 
 **Not claimed:** diagnostic quality, cost, or accuracy of a real model. The real

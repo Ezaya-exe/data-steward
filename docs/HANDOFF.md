@@ -100,12 +100,12 @@ docs/ARCHITECTURE.md is design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **626 unit + 98 integration (non-llm)** passing (integration 6 skipped
+- Tests: **627 unit + 98 integration (non-llm)** passing (integration 6 skipped
   are the real-LLM suites, `RUN_LLM_TESTS=1`); ruff check/format clean (164
   files) and `mypy src` clean (99 source files). Phase-6b routing/resume/
   publish-once tests use a fake LLM and a real SQLite checkpointer; the Phase-5b
   real-LLM acceptance covers F1/F3/F6 (two models, see above); the earlier 3
-  investigator smoke tests still pass with `RUN_LLM_TESTS=1`. Phase 8a adds 70
+  investigator smoke tests still pass with `RUN_LLM_TESTS=1`. Phase 8a adds 71
   unit tests (fast reset, catalogue, scoring, report, runner, isolation,
   RootCause/salvage, daily quota) and one 6-test integration module (template,
   checksums, clone, warehouse guard, three fake-LLM scenarios). The one skipped

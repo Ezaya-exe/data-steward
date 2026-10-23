@@ -152,13 +152,35 @@ extra database after a benchmark is `dqs_demo` (the demo database) and the
 | 8 | Scoring has negative cases and explicit denominators | PASS | `tests/unit/test_bench_scoring.py` (11 tests): wrong category, right category/wrong column, false positive on a control, error counted as a miss, F6/F8/F9 column N/A, table-prefix normalization, `verified_but_wrong`. |
 | 9 | Runner writes incrementally, resumes, protects holdout and quotas | PASS | `tests/unit/test_bench_runner.py` (17 tests): write after every scenario; resume skips completed; model/split mismatch refused; holdout confirmation + prompt-change provenance; daily cap; daily-429 discard; non-quota errors kept; live GitHub refused; missing contracts refused; DB dropped even when the load fails; `--no-dbt` passed through. |
 | 10 | Three fake-LLM scenarios end to end | PASS | `test_three_fake_llm_scenarios_run_end_to_end_and_leave_no_databases`: F1/F4/F6, all detected, non-zero tokens, one JSON + `latest.md`, no scenario database left (only the module template). Wall times in the latest run: F1 30.4 s, F4 22.7 s, F6 26.8 s (fake model, so no network latency). |
-| 11 | Quality gates | PASS | `ruff check` clean, `ruff format --check` clean (164 files), `mypy src` clean (99 source files). Unit **626 passed, 1 skipped** (627 collected, 104 integration deselected). Integration **98 passed, 6 skipped in 471 s** (the 6 real-LLM tests are skipped by marker). |
+| 11 | Quality gates | PASS | `ruff check` clean, `ruff format --check` clean (164 files), `mypy src` clean (99 source files). Unit **627 passed, 1 skipped** (628 collected, 104 integration deselected). Integration **98 passed, 6 skipped in 471 s** (the 6 real-LLM tests are skipped by marker). |
 | 12 | No leftover benchmark databases or sandbox schemas | PASS | After the full suite, `fast_reset.list_steward_databases` returns only `dqs_demo`; `dqs verify cleanup` prints `ok no sandbox schemas remained`; the warehouse checksums equal the captured baseline and it still has 30 batches, 0 incidents, 0 steps, 0 fix attempts. |
 
 **Not in this phase:** the Phase 8 acceptance row "real run on `dev` with
 `LLM_MODEL_BENCH`" is Phase 8b and was not run (owner scope). No benchmark
 numbers are claimed in this report; the token projections in the review packet
 are labelled prior single-scenario evidence.
+
+### CLI wiring smoke (no LLM calls)
+
+`dqs bench run|report` were exercised with `LLM_PROVIDER=fake` on one clean
+control and a temporary results directory (2026-10-23):
+
+```text
+benchmark model=claude-sonnet-5-5 split=dev scenarios=1 dbt_after_load=True
+[1/1] clean-01 (clean)
+    detected=None category=None resolution=None tokens=0
+ok 1 scenario(s) written to <temp>\20261023T110047Z_claude-sonnet-5-5.json
+  detection=None rc_category=None resolution=None fp_rate=0.0
+# then: dqs bench report <file>  -> full markdown table, 0 tokens, FP 0.0, wall 32.4 s
+```
+
+A control creates no incident, so no model call is made; this proves the CLI
+path, the report, the template clone/load/build/monitor and cleanup, not any
+diagnostic ability. The first `bench report` attempt crashed on this Windows
+cp1252 console because the markdown contained `→`/`—`; the renderer is now
+ASCII-only and `test_markdown_is_ascii_safe_for_windows_consoles` guards it.
+The smoke built `dqs_template` and it was dropped afterwards, leaving only
+`dqs_demo`.
 
 ## Design choices and why
 
