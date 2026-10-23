@@ -65,7 +65,7 @@ class BenchRunFile(BaseModel):
 
 
 def _percent(value: float | None) -> str:
-    return "—" if value is None else f"{value * 100:.1f}%"
+    return "n/a" if value is None else f"{value * 100:.1f}%"
 
 
 def _money(value: float) -> str:
@@ -99,11 +99,11 @@ def render_markdown(run: BenchRunFile) -> str:
     meta = run.metadata
     aggregates = run.aggregates()
     lines = [
-        f"# Benchmark — {meta.model}",
+        f"# Benchmark - {meta.model}",
         "",
         f"- run: `{meta.run_id}` ({meta.split})",
         f"- provider/model: `{meta.provider}` / `{meta.model}`",
-        f"- started/finished: {meta.started_at} → {meta.finished_at}",
+        f"- started/finished: {meta.started_at} -> {meta.finished_at}",
         f"- git: `{meta.git_sha}`",
         f"- harness: `{meta.harness_version}`",
         "- prompt hashes: "
@@ -161,10 +161,10 @@ def render_markdown(run: BenchRunFile) -> str:
     if failures or misses:
         lines += ["", "## Scenarios to look at", ""]
         for result in failures:
-            lines.append(f"- `{result.scenario_id}` — error: {result.error}")
+            lines.append(f"- `{result.scenario_id}` - error: {result.error}")
         for result in misses[:20]:
             lines.append(
-                f"- `{result.scenario_id}` — detected={result.detected} "
+                f"- `{result.scenario_id}` - detected={result.detected} "
                 f"category={result.actual_category} (expected {result.expected_category}) "
                 f"resolution={result.actual_resolution} (expected {result.expected_resolution})"
             )

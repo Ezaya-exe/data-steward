@@ -97,7 +97,7 @@ def test_markdown_contains_provenance_overall_and_per_kind_metrics() -> None:
         stop_reason="daily token cap reached", discarded_scenarios=["f4-orders-status-20"]
     )
     markdown = render_markdown(run)
-    assert "# Benchmark — test-model" in markdown
+    assert "# Benchmark - test-model" in markdown
     assert "`deadbeef`" in markdown
     assert "**stopped early:** daily token cap reached" in markdown
     assert "discarded: f4-orders-status-20" in markdown
@@ -128,4 +128,11 @@ def test_markdown_handles_a_run_with_no_scenarios() -> None:
     run = BenchRunFile(metadata=_metadata(), scenarios=[])
     markdown = render_markdown(run)
     assert "| overall | 0 |" in markdown
-    assert "—" in markdown
+    assert "n/a" in markdown
+
+
+def test_markdown_is_ascii_safe_for_windows_consoles() -> None:
+    """`dqs bench report` writes to a cp1252 console; no Unicode can crash it."""
+    run = _run_file(stop_reason="daily quota", discarded_scenarios=["f6-orders-03"])
+    markdown = render_markdown(run)
+    markdown.encode("ascii")  # raises UnicodeEncodeError if a glyph sneaks back in
