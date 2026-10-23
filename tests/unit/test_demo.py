@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import uuid
 
-from dqs.demo import DEFAULT_FAULT, _preview_paths
+from dqs.config import Settings
+from dqs.demo import DEFAULT_FAULT, DEMO_DB, _demo_settings, _preview_paths
 from dqs.models.enums import IncidentStatus, ResolutionType
 from dqs.models.state import WorkflowOutcome
 from dqs.publish.base import PublicationKind, PublicationMode, PublicationResult
@@ -69,3 +70,11 @@ def test_nothing_published_means_no_preview_paths() -> None:
         checkpoint_path="data/checkpoints.sqlite",
     )
     assert _preview_paths(outcome) == (None, None)
+
+
+def test_the_demo_forces_its_own_database_and_dry_run_publishing() -> None:
+    live = Settings(_env_file=None, github_mode="live")
+    effective = _demo_settings(live)
+    assert effective.pg_database == DEMO_DB
+    assert effective.github_mode == "dry_run"
+    assert live.github_mode == "live", "the caller's settings must not be mutated"

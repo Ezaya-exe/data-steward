@@ -299,6 +299,41 @@ def is_daily_quota_error(exc: BaseException) -> bool:
     return any(marker in text for marker in _DAILY_QUOTA_MARKERS)
 
 
+# Infrastructure failures are the provider's problem, not the agent's: an HTTP
+# 429 after retries, a quota message, or a phrasing such as "too many requests".
+# We match a small vocabulary rather than one vendor's exact wording, because
+# providers reword errors (and gateways wrap them). The runner records these as
+# `infra_error` and leaves them out of every score denominator.
+_INFRA_ERROR_RE: Final = re.compile(
+    r"\b429\b|rate[\s_-]?limit|ratelimit|quota|too many requests|\blimit\b",
+    re.IGNORECASE,
+)
+
+
+def is_infra_error(error: BaseException | str) -> bool:
+    """True for a rate-limit/quota failure after retries are exhausted.
+
+    The check is deliberately wider than `is_daily_quota_error`: any 429 status
+    or a message that mentions rate/quota/limit/too many requests qualifies.
+    """
+    if isinstance(error, DailyQuotaExceeded):
+        return True
+    if isinstance(error, BaseException) and exception_status_code(error) == 429:
+        return True
+    return bool(_INFRA_ERROR_RE.search(str(error)))
+
+
+def is_daily_quota_message(error: BaseException | str) -> bool:
+    """True when an error message names an exhausted *daily* quota.
+
+    The workflow turns a provider exception into `outcome.error` text, so the
+    runner cannot rely on the exception type/status by the time it decides
+    whether to stop immediately.
+    """
+    text = str(error).lower()
+    return any(marker in text for marker in _DAILY_QUOTA_MARKERS)
+
+
 def retry_after_seconds(exc: BaseException) -> float | None:
     """Parse `Retry-After` (seconds or HTTP-date) from the provider response."""
     response = getattr(exc, "response", None)

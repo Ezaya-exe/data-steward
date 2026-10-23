@@ -13,8 +13,16 @@ import datetime as dt
 import uuid
 from typing import Any
 
+import pytest
+
 from dqs.bench.scenarios import Scenario, get_scenario
-from dqs.bench.scoring import Observation, ScenarioRun, aggregate, score_scenario
+from dqs.bench.scoring import (
+    Observation,
+    ScenarioRun,
+    aggregate,
+    score_scenario,
+    wilson_interval,
+)
 from dqs.models.enums import (
     IncidentStatus,
     ResolutionType,
@@ -297,3 +305,88 @@ def test_aggregate_handles_an_empty_run_without_dividing_by_zero() -> None:
     assert aggregates.overall.detection_recall is None
     assert aggregates.overall.false_positive_rate is None
     assert aggregates.by_kind == {}
+
+
+def test_wilson_interval_matches_hand_computed_values() -> None:
+    low, high = wilson_interval(0, 10)
+    assert low == pytest.approx(0.0, abs=1e-9)
+    assert high == pytest.approx(0.2775, abs=1e-3)
+
+    low, high = wilson_interval(10, 10)
+    assert low == pytest.approx(0.7225, abs=1e-3)
+    assert high == pytest.approx(1.0, abs=1e-9)
+
+    low, high = wilson_interval(1, 2)
+    assert low == pytest.approx(0.0945, abs=1e-3)
+    assert high == pytest.approx(0.9055, abs=1e-3)
+
+
+def test_wilson_interval_is_not_applicable_with_no_samples() -> None:
+    assert wilson_interval(0, 0) is None
+    assert wilson_interval(3, 0) is None
+
+
+def test_infra_errors_are_excluded_from_every_denominator() -> None:
+    good = _run(
+        "f1-orders-status",
+        detected=True,
+        category=True,
+        columns=True,
+        resolution=True,
+        verifier=True,
+        semantic=True,
+        tokens_in=100,
+    )
+    infra = ScenarioRun(
+        scenario_id="f4-orders-status-20",
+        split="dev",
+        kind="column_rename",
+        clean=False,
+        infra_error="HTTP 429 rate limit",
+        tokens_in=50,
+    )
+    control_infra = ScenarioRun(
+        scenario_id="clean-01",
+        split="dev",
+        kind="clean",
+        clean=True,
+        infra_error="quota exceeded",
+    )
+    overall = aggregate([good, infra, control_infra]).overall
+    assert (overall.scenarios, overall.faults, overall.controls) == (1, 1, 0)
+    assert overall.infra_errors == 2
+    assert overall.detection_success == 1
+    assert overall.detection_recall == 1.0
+    assert overall.errors == 0
+    assert overall.false_positive_rate is None
+
+
+def test_metric_block_keeps_the_exact_numerators_for_confidence_intervals() -> None:
+    runs = [
+        _run(
+            "f1-orders-status",
+            detected=True,
+            category=False,
+            columns=True,
+            resolution=False,
+            verifier=False,
+            semantic=False,
+        ),
+        _run(
+            "f4-orders-status-20",
+            detected=False,
+            category=True,
+            columns=False,
+            resolution=True,
+            verifier=True,
+            semantic=False,
+        ),
+    ]
+    overall = aggregate(runs).overall
+    assert overall.detection_success == 1
+    assert overall.category_success == 1
+    assert overall.columns_success == 1
+    assert overall.resolution_success == 1
+    assert overall.fix_success == 1
+    assert overall.semantic_success == 0
+    assert overall.verified_but_wrong == 1

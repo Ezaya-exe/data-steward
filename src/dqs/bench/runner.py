@@ -36,9 +36,17 @@ from dqs import db as dbmod
 from dqs import fast_reset
 from dqs import incidents as incidents_mod
 from dqs import monitor as monitor_mod
-from dqs.agents.llm import BudgetTracker, LLMClient, get_llm, settings_secrets
+from dqs.agents.llm import (
+    BudgetTracker,
+    LLMClient,
+    get_llm,
+    is_daily_quota_message,
+    is_infra_error,
+    settings_secrets,
+)
 from dqs.bench import oracle
-from dqs.bench.harness import harness_metadata, prompt_hashes
+from dqs.bench.harness import code_fingerprint, git_dirty, harness_metadata, prompt_hashes
+from dqs.bench.ledger import DEFAULT_LEDGER_PATH, TokenLedger
 from dqs.bench.report import BenchMetadata, BenchRunFile, load_run_file, render_markdown
 from dqs.bench.scenarios import (
     FAULT_DATE,
@@ -53,6 +61,7 @@ from dqs.contracts import store as contracts_store
 from dqs.errors import DailyQuotaExceeded, DqsError
 from dqs.models.enums import ResolutionType
 from dqs.models.root_cause import RootCause
+from dqs.publish.base import Publisher
 from dqs.publish.store import load_latest_fix_attempt
 from dqs.sim import pipeline as sim_pipeline
 from dqs.sim.faults import parse_fault_specs
@@ -68,6 +77,9 @@ CONTRACTS_DIR: Final = REPO_ROOT / "contracts"
 # A prompt above this many input tokens usually means a tool result was not
 # compacted; the benchmark warns instead of silently paying for it.
 PROMPT_TOKEN_WARNING: Final = 6000
+# Two consecutive provider-side failures are enough evidence that continuing
+# would just burn the day's quota. A daily-quota error stops immediately.
+INFRA_CIRCUIT_BREAKER: Final = 2
 
 PRIMARY_KEYS: Final = {
     "customers": "customer_id",
@@ -98,6 +110,9 @@ class BenchOptions(BaseModel):
     pause_seconds: float = 1.0
     confirm_holdout: bool = False
     llm_retry_max_wait_seconds: float = 90.0
+    repeats: int = 1
+    acknowledge_changes: str | None = None
+    ledger_path: Path = DEFAULT_LEDGER_PATH
     results_dir: Path = RESULTS_DIR
 
 
@@ -139,6 +154,21 @@ def _safe_model_name(model: str) -> str:
 
 def _now_iso() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+
+
+def _utc_today() -> dt.date:
+    return dt.datetime.now(dt.UTC).date()
+
+
+def force_bench_dry_run(settings: Settings) -> Settings:
+    """The benchmark *ignores* `GITHUB_MODE` and always publishes to `out/`.
+
+    A benchmark may run hundreds of real model decisions; one misconfigured
+    `.env` must not turn that into live issues/PRs. Forcing the effective mode is
+    safer than refusing to start, because it lets the measurement run while the
+    publisher construction still goes through the dry-run path.
+    """
+    return settings.model_copy(update={"github_mode": "dry_run"})
 
 
 def _run_id() -> str:
@@ -266,17 +296,20 @@ def execute_scenario(
     scenario: Scenario,
     *,
     contracts: dict[str, Any],
+    repeat: int = 0,
+    publisher: Publisher | None = None,
     client_factory: ClientFactory = _default_client_factory,
     progress: Progress = lambda _message: None,
 ) -> ScenarioRun:
     """Run and score one scenario; the caller owns the database lifecycle."""
     database = _scenario_database(scenario)
-    bench_settings = settings.model_copy(update={"pg_database": database})
+    # Safety: the benchmark owns the effective mode, not `.env`.
+    bench_settings = force_bench_dry_run(settings).model_copy(update={"pg_database": database})
     started = time.perf_counter()
     client: LLMClient | None = None
     engine: Engine | None = None
     context: ToolContext | None = None
-    observation = Observation()
+    observation = Observation(repeat=repeat)
     oracle_error: str | None = None
 
     try:
@@ -318,6 +351,7 @@ def execute_scenario(
                 budget=tracker,
                 tool_context=context,
                 contracts_dir=CONTRACTS_DIR,
+                publisher=publisher,
             )
             with IncidentWorkflow(deps, checkpoint_path=CHECKPOINT_PATH) as workflow:
                 outcome = workflow.run(incident.incident_id, auto_approve=True)
@@ -327,7 +361,10 @@ def execute_scenario(
                     )
             observation.resolution = outcome.resolution_type
             if outcome.error:
-                observation.error = outcome.error
+                if is_infra_error(outcome.error):
+                    observation.infra_error = outcome.error
+                else:
+                    observation.error = outcome.error
             observation.root_cause = _root_cause_from_incident(engine, incident.incident_id)
             attempt = load_latest_fix_attempt(engine, incident.incident_id)
             observation.verification_passed = None if attempt is None else attempt[1].passed
@@ -350,12 +387,20 @@ def execute_scenario(
             observation.tokens_in = sum(call.input_tokens for call in client.calls)
             observation.tokens_out = sum(call.output_tokens for call in client.calls)
 
-        if oracle_error is not None and observation.error is None:
+        if (
+            oracle_error is not None
+            and observation.error is None
+            and observation.infra_error is None
+        ):
             observation.error = oracle_error
     except DailyQuotaExceeded:
         raise
     except Exception as exc:
-        observation.error = f"{type(exc).__name__}: {exc}"
+        message = f"{type(exc).__name__}: {exc}"
+        if is_infra_error(exc):
+            observation.infra_error = message
+        else:
+            observation.error = message
     finally:
         observation.wall_s = time.perf_counter() - started
         if context is not None:
@@ -425,8 +470,35 @@ def _select_scenarios(options: BenchOptions) -> list[Scenario]:
     return selected
 
 
+def _require_fingerprint_ack(
+    previous_fingerprint: object,
+    current_fingerprint: str,
+    acknowledge_changes: str | None,
+    *,
+    source: str,
+) -> None:
+    """Refuse a holdout/all run when the code that produced the dev file changed."""
+    previous = str(previous_fingerprint or "")
+    if previous == current_fingerprint:
+        return
+    if acknowledge_changes and acknowledge_changes.strip():
+        return
+    raise BenchError(
+        "the benchmark code/prompt fingerprint changed since "
+        f"{source} ({previous[:12] or 'unknown'} -> {current_fingerprint[:12]}); "
+        'pass --acknowledge-changes "reason" to record and continue'
+    )
+
+
 def _new_run_file(
-    settings: Settings, options: BenchOptions, selected: Sequence[Scenario], run_id: str
+    settings: Settings,
+    options: BenchOptions,
+    selected: Sequence[Scenario],
+    run_id: str,
+    *,
+    fingerprint: str,
+    dirty: bool,
+    github_mode_env: str,
 ) -> BenchRunFile:
     holdout_count = sum(1 for scenario in selected if scenario.split.value == "holdout")
     previous = _load_previous_dev(options.results_dir, run_id)
@@ -435,6 +507,13 @@ def _new_run_file(
     if previous is not None:
         previous_run = str(previous.get("run_id") or "")
         prompt_changed = previous.get("prompt_hashes") != prompt_hashes()
+        if options.split in {"holdout", "all"}:
+            _require_fingerprint_ack(
+                previous.get("code_fingerprint"),
+                fingerprint,
+                options.acknowledge_changes,
+                source=f"the newest dev run `{previous_run or 'unknown'}`",
+            )
     if holdout_count and not options.confirm_holdout:
         raise BenchError(
             "the holdout split is for reporting only: pass --confirm-holdout to run it"
@@ -449,6 +528,9 @@ def _new_run_file(
         started_at=_now_iso(),
         finished_at=_now_iso(),
         git_sha=git_sha(),
+        git_dirty=dirty,
+        code_fingerprint=fingerprint,
+        acknowledged_changes=options.acknowledge_changes,
         harness_version=str(harness_metadata()["harness_version"]),
         prompt_hashes=hashes,
         settings={
@@ -458,12 +540,16 @@ def _new_run_file(
             "tpm_limit": options.tpm_limit,
             "llm_retry_max_wait_seconds": options.llm_retry_max_wait_seconds,
             "dbt_after_load": not options.no_dbt,
+            "github_mode_env": github_mode_env,
+            "github_mode_forced": github_mode_env != "dry_run",
+            "repeats": options.repeats,
         },
         dbt_after_load=not options.no_dbt,
         daily_token_cap=options.daily_token_cap,
         tpm_limit=options.tpm_limit,
         pause_seconds=options.pause_seconds,
         llm_retry_max_wait_seconds=options.llm_retry_max_wait_seconds,
+        repeats=options.repeats,
         holdout_confirmed=options.confirm_holdout,
         prompt_changed_since_last_dev=prompt_changed,
         previous_dev_run=previous_run,
@@ -496,6 +582,31 @@ def _refresh_totals(run: BenchRunFile) -> None:
     run.metadata.wall_s_total = round(sum(result.wall_s for result in run.scenarios), 3)
 
 
+def _scenario_key(result: ScenarioRun) -> tuple[str, int]:
+    return result.scenario_id, result.repeat
+
+
+def _ordered_results(
+    existing: dict[tuple[str, int], ScenarioRun], selected: Sequence[Scenario]
+) -> list[ScenarioRun]:
+    order = {scenario.id: index for index, scenario in enumerate(selected)}
+    return sorted(
+        existing.values(),
+        key=lambda result: (order.get(result.scenario_id, len(order)), result.repeat),
+    )
+
+
+def _infra_result(scenario: Scenario, repeat: int, message: str) -> ScenarioRun:
+    return score_scenario(scenario, Observation(repeat=repeat, infra_error=message))
+
+
+def _finish(run: BenchRunFile, results_path: Path) -> None:
+    _refresh_totals(run)
+    run.metadata.finished_at = _now_iso()
+    _write_run(run, results_path)
+    write_latest_md(run, results_path.parent)
+
+
 def run_benchmark(
     settings: Settings,
     options: BenchOptions,
@@ -504,12 +615,13 @@ def run_benchmark(
     client_factory: ClientFactory = _default_client_factory,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    today: Callable[[], dt.date] = _utc_today,
 ) -> tuple[BenchRunFile, Path]:
     """Run the selected scenarios sequentially; returns the file and its path."""
-    if settings.github_mode != "dry_run":
-        raise BenchError(
-            "the benchmark writes GitHub artifacts: set GITHUB_MODE=dry_run (live is refused)"
-        )
+    if options.repeats < 1:
+        raise BenchError("--repeats must be at least 1")
+    github_mode_env = settings.github_mode
+    effective = force_bench_dry_run(settings)
     contracts = contracts_store.load_approved(CONTRACTS_DIR)
     if not contracts:
         raise BenchError(
@@ -518,6 +630,9 @@ def run_benchmark(
     selected = _select_scenarios(options)
     if not selected:
         raise BenchError("no scenarios selected")
+
+    fingerprint = code_fingerprint()
+    dirty = git_dirty()
 
     resume_from: BenchRunFile | None = None
     if options.resume is not None:
@@ -534,21 +649,44 @@ def run_benchmark(
             raise BenchError(
                 f"resume file split is {resume_from.metadata.split!r}, --split is {options.split!r}"
             )
-        if resume_from.metadata.provider != settings.llm_provider:
+        if resume_from.metadata.provider != effective.llm_provider:
             raise BenchError(
                 f"resume file provider is {resume_from.metadata.provider!r}, "
-                f"settings say {settings.llm_provider!r}"
+                f"settings say {effective.llm_provider!r}"
+            )
+        if resume_from.metadata.repeats != options.repeats:
+            raise BenchError(
+                f"resume file used --repeats {resume_from.metadata.repeats}, "
+                f"but --repeats is {options.repeats}"
+            )
+        if options.split in {"holdout", "all"}:
+            _require_fingerprint_ack(
+                resume_from.metadata.code_fingerprint,
+                fingerprint,
+                options.acknowledge_changes,
+                source=f"the resume file {path.name}",
             )
         run = resume_from
         results_path = path
-        completed = {result.scenario_id for result in run.scenarios if result.error is None}
-        progress(
-            f"resuming {path.name}: {len(completed)} completed, "
-            f"{len(selected) - len(completed)} to run"
-        )
+        completed = {
+            _scenario_key(result)
+            for result in run.scenarios
+            if result.error is None and result.infra_error is None
+        }
+        tasks = [(scenario, repeat) for scenario in selected for repeat in range(options.repeats)]
+        remaining = sum(1 for key in tasks if (key[0].id, key[1]) not in completed)
+        progress(f"resuming {path.name}: {len(completed)} completed, {remaining} to run")
     else:
         run_id = _run_id()
-        run = _new_run_file(settings, options, selected, run_id)
+        run = _new_run_file(
+            effective,
+            options,
+            selected,
+            run_id,
+            fingerprint=fingerprint,
+            dirty=dirty,
+            github_mode_env=github_mode_env,
+        )
         results_path = _results_path(options, run_id)
         completed = set()
 
@@ -558,78 +696,120 @@ def run_benchmark(
     ):
         raise BenchError("the holdout split requires --confirm-holdout")
 
-    existing = {result.scenario_id: result for result in run.scenarios}
+    existing = {_scenario_key(result): result for result in run.scenarios}
     throttle = TokenThrottle(options.tpm_limit, clock=clock, sleep=sleep)
     run.metadata.resume_hint = None
     run.metadata.stop_reason = None
+    tasks = [(scenario, repeat) for scenario in selected for repeat in range(options.repeats)]
+    total_runs = len(tasks)
     progress(
         f"benchmark model={options.model} split={options.split} "
-        f"scenarios={len(selected)} dbt_after_load={not options.no_dbt}"
+        f"scenarios={len(selected)} repeats={options.repeats} "
+        f"dbt_after_load={not options.no_dbt}"
     )
 
-    for index, scenario in enumerate(selected):
-        if scenario.id in completed:
+    ledger = TokenLedger(options.ledger_path, today=today)
+    provider = effective.llm_provider
+    already_used = ledger.total(provider, options.model)
+    progress(
+        f"token ledger: {already_used} tokens already recorded today for "
+        f"{provider}/{options.model} (daily cap {options.daily_token_cap})"
+    )
+    progress(
+        "note: other LLM use (dqs demo, tests, another terminal) shares the same "
+        "provider quota; this ledger only sees benchmark runs"
+    )
+
+    consecutive_infra = 0
+    for index, (scenario, repeat) in enumerate(tasks):
+        key = (scenario.id, repeat)
+        if key in completed:
             continue
-        used = sum(result.tokens_in + result.tokens_out for result in existing.values())
+        used = ledger.total(provider, options.model)
         if used >= options.daily_token_cap:
             run.metadata.stop_reason = (
-                f"daily token cap reached before {scenario.id} "
-                f"({used} >= {options.daily_token_cap})"
+                f"daily token cap reached before {scenario.id} repeat {repeat + 1} "
+                f"({used} >= {options.daily_token_cap} tokens today)"
             )
             run.metadata.resume_hint = _resume_command(options, results_path)
             progress(f"stopping: {run.metadata.stop_reason}")
             break
 
         throttle.wait()
-        progress(f"[{index + 1}/{len(selected)}] {scenario.id} ({scenario.kind})")
+        label = f"{scenario.id} ({scenario.kind})"
+        if options.repeats > 1:
+            label += f" repeat {repeat + 1}/{options.repeats}"
+        progress(f"[{index + 1}/{total_runs}] {label}")
         try:
             result = execute_scenario(
-                settings,
+                effective,
                 options,
                 scenario,
                 contracts=contracts,
+                repeat=repeat,
                 client_factory=client_factory,
                 progress=progress,
             )
         except DailyQuotaExceeded as exc:
-            # Discard the scenario entirely: its partial spend is not a score.
-            run.metadata.discarded_scenarios = sorted(
-                {*run.metadata.discarded_scenarios, scenario.id}
-            )
+            # Daily quota is the strongest infra signal: record the attempt (so
+            # --resume knows to re-run it), then stop immediately.
+            result = _infra_result(scenario, repeat, f"daily provider quota exhausted: {exc}")
+            existing[key] = result
+            run.scenarios = _ordered_results(existing, selected)
+            ledger.add(provider, options.model, result.tokens_in + result.tokens_out)
             run.metadata.stop_reason = f"daily provider quota exhausted: {exc}"
             run.metadata.resume_hint = _resume_command(options, results_path)
-            progress(f"quota exhausted; discarded {scenario.id}; stopping for today")
-            _refresh_totals(run)
-            run.metadata.finished_at = _now_iso()
-            _write_run(run, results_path)
-            write_latest_md(run, results_path.parent)
+            progress(f"quota exhausted; recorded {scenario.id} as infra_error; stopping")
+            _finish(run, results_path)
             return run, results_path
 
-        existing[scenario.id] = result
-        run.scenarios = list(existing.values())
+        tokens = result.tokens_in + result.tokens_out
+        ledger.add(provider, options.model, tokens)
+        throttle.record(tokens)
+        existing[key] = result
+        run.scenarios = _ordered_results(existing, selected)
         _refresh_totals(run)
         run.metadata.finished_at = _now_iso()
         _write_run(run, results_path)
-        throttle.record(result.tokens_in + result.tokens_out)
-        flag = "" if result.error is None else f" ERROR {result.error}"
+
+        if result.infra_error is not None:
+            consecutive_infra += 1
+        else:
+            consecutive_infra = 0
+        flag = ""
+        if result.infra_error is not None:
+            flag = f" INFRA {result.infra_error}"
+        elif result.error is not None:
+            flag = f" ERROR {result.error}"
         progress(
             f"    detected={result.detected} category={result.actual_category} "
-            f"resolution={result.actual_resolution} tokens={result.tokens_in + result.tokens_out}"
-            f"{flag}"
+            f"resolution={result.actual_resolution} tokens={tokens}{flag}"
         )
-        if options.pause_seconds > 0 and index < len(selected) - 1:
+
+        if result.infra_error is not None and is_daily_quota_message(result.infra_error):
+            run.metadata.stop_reason = f"daily provider quota exhausted: {result.infra_error}"
+            run.metadata.resume_hint = _resume_command(options, results_path)
+            progress(f"stopping: {run.metadata.stop_reason}")
+            break
+        if consecutive_infra >= INFRA_CIRCUIT_BREAKER:
+            run.metadata.stop_reason = (
+                f"circuit breaker: {consecutive_infra} consecutive infrastructure errors "
+                f"(last: {result.infra_error})"
+            )
+            run.metadata.resume_hint = _resume_command(options, results_path)
+            progress(f"stopping: {run.metadata.stop_reason}")
+            break
+        if options.pause_seconds > 0 and index < total_runs - 1:
             sleep(options.pause_seconds)
 
-    _refresh_totals(run)
-    run.metadata.finished_at = _now_iso()
-    _write_run(run, results_path)
-    write_latest_md(run, results_path.parent)
+    _finish(run, results_path)
     return run, results_path
 
 
 def _resume_command(options: BenchOptions, results_path: Path) -> str:
+    repeats = f" --repeats {options.repeats}" if options.repeats > 1 else ""
     return (
-        f"dqs bench run --split {options.split} --model {options.model} "
+        f"dqs bench run --split {options.split} --model {options.model}{repeats} "
         f"--resume {results_path.as_posix()}"
     )
 

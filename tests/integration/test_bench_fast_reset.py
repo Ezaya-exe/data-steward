@@ -171,7 +171,7 @@ def test_template_is_byte_identical_to_the_captured_baseline(
     assert checksums == BASELINE_CHECKSUMS
     assert _set_hash(checksums) == BASELINE_SET_HASH
 
-    meta = fast_reset._template_meta(
+    meta = fast_reset.template_meta(
         settings.model_copy(update={"pg_database": test_names["template"]})
     )
     assert meta is not None
@@ -263,6 +263,7 @@ def test_three_fake_llm_scenarios_run_end_to_end_and_leave_no_databases(
         split="dev",
         ids=ids,
         results_dir=tmp_path,
+        ledger_path=tmp_path / "token_ledger.json",
         pause_seconds=0.0,
     )
     progress: list[str] = []
@@ -304,3 +305,76 @@ def test_three_fake_llm_scenarios_run_end_to_end_and_leave_no_databases(
     leftovers = fast_reset.list_steward_databases(settings, prefix="dqs_bench_")
     assert leftovers == [fast_reset.TEMPLATE_DB]
     assert any("detected=" in line for line in progress)
+
+
+class _RecordingGitHubClient:
+    """A live-client stand-in: any call at all is a safety failure."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str) -> object:
+        def record(*_args: object, **_kwargs: object) -> object:
+            self.calls.append(name)
+            raise AssertionError(f"benchmark tried to call the live GitHub client: {name}")
+
+        return record
+
+
+def test_live_github_mode_still_records_zero_github_client_calls(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    template: fast_reset.TemplateStatus,
+) -> None:
+    """The benchmark forces dry-run; a fake live client must never be touched."""
+    _ = template
+    from dqs.workflow import runner as workflow_runner
+
+    recording = _RecordingGitHubClient()
+    real_build = workflow_runner.build_publisher
+    seen_modes: list[str] = []
+
+    def spy(
+        effective: Settings,
+        *,
+        store: object,
+        output_dir: Path | None = None,
+    ) -> object:
+        seen_modes.append(effective.github_mode)
+        return real_build(
+            effective,
+            store=store,  # type: ignore[arg-type]
+            output_dir=output_dir,
+            github_client=recording,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(workflow_runner, "build_publisher", spy)
+    monkeypatch.setattr(runner, "CHECKPOINT_PATH", tmp_path / "checkpoints.sqlite")
+    live = settings.model_copy(
+        update={
+            "github_mode": "live",
+            "github_token": "not-a-real-token",
+            "github_repo": "owner/repo",
+        }
+    )
+    options = runner.BenchOptions(
+        model="fake",
+        split="dev",
+        ids=["f1-orders-status"],
+        results_dir=tmp_path,
+        ledger_path=tmp_path / "token_ledger.json",
+        pause_seconds=0.0,
+    )
+    run, _path = runner.run_benchmark(
+        live,
+        options,
+        client_factory=_fake_client_factory,
+        sleep=lambda _seconds: None,
+    )
+
+    assert run.scenarios[0].error is None
+    assert seen_modes == ["dry_run"]
+    assert recording.calls == []
+    assert run.metadata.settings["github_mode_env"] == "live"
+    assert run.metadata.settings["github_mode"] == "dry_run"

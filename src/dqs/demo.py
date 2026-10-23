@@ -90,6 +90,15 @@ def ensure_demo_database(settings: Settings, *, reset: bool = False) -> bool:
     return True
 
 
+def _demo_settings(settings: Settings) -> Settings:
+    """The demo owns a throwaway DB and never writes to GitHub.
+
+    Like the benchmark, it forces `dry_run` rather than trusting `.env`: a demo
+    auto-approves, so a live misconfiguration would publish without a review.
+    """
+    return settings.model_copy(update={"pg_database": DEMO_DB, "github_mode": "dry_run"})
+
+
 def _contracts_dir() -> Path:
     return Path.cwd() / contracts_store.CONTRACTS_DIRNAME
 
@@ -181,7 +190,9 @@ def run_demo(
         raise DqsError("the demo needs at least one fault spec")
     notify = progress if progress is not None else (lambda _message: None)
 
-    demo_settings = settings.model_copy(update={"pg_database": DEMO_DB})
+    demo_settings = _demo_settings(settings)
+    if settings.github_mode != "dry_run":
+        notify("GITHUB_MODE forced to dry_run for the demo (no GitHub writes)")
     notify(f"preparing {DEMO_DB} from the cached baseline template")
     ensure_demo_database(settings, reset=reset)
     notify("approving generated contracts")

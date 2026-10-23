@@ -136,3 +136,78 @@ def test_markdown_is_ascii_safe_for_windows_consoles() -> None:
     run = _run_file(stop_reason="daily quota", discarded_scenarios=["f6-orders-03"])
     markdown = render_markdown(run)
     markdown.encode("ascii")  # raises UnicodeEncodeError if a glyph sneaks back in
+
+
+def test_markdown_shows_a_wilson_interval_and_n_for_every_proportion() -> None:
+    markdown = render_markdown(_run_file())
+    assert "100.0% (1/1) [" in markdown  # detection, fix valid and semantic
+    assert "0.0% (0/1) [" in markdown  # false-positive rate
+    # The verified-but-wrong column is a proportion with the same denominator.
+    assert markdown.count("100.0% (1/1)") >= 4
+    assert "n/a (0/0)" in render_markdown(BenchRunFile(metadata=_metadata(), scenarios=[]))
+
+
+def test_markdown_records_dirty_tree_fingerprint_and_acknowledged_change() -> None:
+    markdown = render_markdown(
+        _run_file(
+            git_dirty=True,
+            code_fingerprint="a" * 64,
+            acknowledged_changes="changed the fixer prompt on purpose",
+        )
+    )
+    assert "(**dirty worktree**)" in markdown
+    assert "code fingerprint: `" + "a" * 16 + "`" in markdown
+    assert "acknowledged code change: changed the fixer prompt on purpose" in markdown
+
+
+def _repeated(scenario_id: str, repeat: int, *, detected: bool) -> ScenarioRun:
+    scenario_kind = "column_rename"
+    return ScenarioRun(
+        scenario_id=scenario_id,
+        split="dev",
+        kind=scenario_kind,
+        clean=False,
+        repeat=repeat,
+        detected=detected,
+        rc_category_correct=True,
+        rc_columns_correct=True,
+        resolution_correct=True,
+    )
+
+
+def test_markdown_reports_stable_and_flaky_repeats() -> None:
+    run = BenchRunFile(
+        metadata=_metadata(repeats=3),
+        scenarios=[
+            _repeated("f1-orders-status", 0, detected=True),
+            _repeated("f1-orders-status", 1, detected=True),
+            _repeated("f1-orders-status", 2, detected=True),
+            _repeated("f4-orders-status-20", 0, detected=True),
+            _repeated("f4-orders-status-20", 1, detected=False),
+            _repeated("f4-orders-status-20", 2, detected=True),
+        ],
+    )
+    markdown = render_markdown(run)
+    assert "## Repeat stability" in markdown
+    assert "| `f1-orders-status` | 3 | stable |" in markdown
+    assert "| `f4-orders-status-20` | 3 | flaky |" in markdown
+
+
+def test_markdown_lists_infrastructure_errors_separately() -> None:
+    run = BenchRunFile(
+        metadata=_metadata(),
+        scenarios=[
+            ScenarioRun(
+                scenario_id="f1-orders-status",
+                split="dev",
+                kind="column_rename",
+                clean=False,
+                infra_error="HTTP 429 too many requests",
+            )
+        ],
+    )
+    markdown = render_markdown(run)
+    assert "## Infrastructure errors (1)" in markdown
+    assert "excluded from every score denominator" in markdown
+    assert "`f1-orders-status` repeat 1: HTTP 429 too many requests" in markdown
+    assert "| overall | 0 |" in markdown

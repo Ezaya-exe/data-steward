@@ -12,6 +12,7 @@ semantic correctness over PR-expected scenarios; false-positive over controls.
 
 from __future__ import annotations
 
+import math
 import statistics
 from typing import Final
 
@@ -47,6 +48,10 @@ class Observation(BaseModel):
     cost_usd: float = 0.0
     wall_s: float = 0.0
     error: str | None = None
+    # A rate-limit/quota failure is the provider's problem, not a wrong answer.
+    # It is persisted for the resume path but excluded from every denominator.
+    infra_error: str | None = None
+    repeat: int = 0
 
 
 class ScenarioRun(BaseModel):
@@ -58,7 +63,9 @@ class ScenarioRun(BaseModel):
     split: str
     kind: str
     clean: bool
+    repeat: int = 0
     error: str | None = None
+    infra_error: str | None = None
     detected: bool | None = None
     rc_category_correct: bool | None = None
     rc_columns_correct: bool | None = None
@@ -89,6 +96,19 @@ class MetricBlock(BaseModel):
     scenarios: int
     faults: int
     controls: int
+    # Denominator sizes for the proportions that are not simply `faults` /
+    # `controls`; the report uses them to show n and a Wilson interval.
+    column_scoped: int = 0
+    pr_expected: int = 0
+    # Numerators are stored, not recomputed from a rounded rate, so the report
+    # and the confidence interval always use the exact count.
+    detection_success: int = 0
+    category_success: int = 0
+    columns_success: int = 0
+    resolution_success: int = 0
+    fix_success: int = 0
+    semantic_success: int = 0
+    false_positive_success: int = 0
     detection_recall: float | None = None
     rc_category_accuracy: float | None = None
     rc_columns_accuracy: float | None = None
@@ -97,6 +117,7 @@ class MetricBlock(BaseModel):
     semantic_rate: float | None = None
     false_positive_rate: float | None = None
     verified_but_wrong: int = 0
+    infra_errors: int = 0
     errors: int = 0
     total_cost_usd: float = 0.0
     median_cost_usd: float = 0.0
@@ -151,7 +172,9 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
         split=scenario.split.value,
         kind=scenario.kind,
         clean=scenario.is_control,
+        repeat=observation.repeat,
         error=observation.error,
+        infra_error=observation.infra_error,
         tool_calls=observation.tool_calls,
         tokens_in=observation.tokens_in,
         tokens_out=observation.tokens_out,
@@ -160,7 +183,8 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
     )
 
     if scenario.is_control:
-        run.false_positive = bool(observation.incidents)
+        if observation.infra_error is None:
+            run.false_positive = bool(observation.incidents)
         return run
 
     assert expected is not None  # catalogue validation guarantees this
@@ -168,6 +192,12 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
     run.expected_category = expected.expected_category.value
     run.expected_columns = sorted(expected.acceptable_columns)
     run.expected_resolution = expected.expected_resolution.value
+
+    # Infrastructure failures are recorded but never scored: the agent did not
+    # get a fair chance, so counting the attempt as a miss would distort the
+    # benchmark. `--resume` re-runs these records.
+    if observation.infra_error is not None:
+        return run
 
     run.detected = _detected(scenario, observation.incidents)
     run.actual_category = None if root_cause is None else root_cause.category.value
@@ -197,6 +227,22 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
     return run
 
 
+def wilson_interval(successes: int, n: int, *, z: float = 1.96) -> tuple[float, float] | None:
+    """Two-sided 95% Wilson score interval for a proportion, or None when n=0.
+
+    Wilson is used instead of the normal approximation because it behaves at the
+    boundaries: 0/10 and 10/10 still get a sensible interval, and n=0 is
+    explicitly "not applicable" rather than a division by zero.
+    """
+    if n <= 0:
+        return None
+    p = min(1.0, max(0.0, successes / n))
+    denominator = 1.0 + (z * z) / n
+    centre = (p + (z * z) / (2.0 * n)) / denominator
+    margin = z * math.sqrt((p * (1.0 - p) / n) + (z * z) / (4.0 * n * n)) / denominator
+    return max(0.0, centre - margin), min(1.0, centre + margin)
+
+
 def _median(values: list[float]) -> float:
     return round(statistics.median(values), 6) if values else 0.0
 
@@ -220,37 +266,44 @@ def aggregate(runs: list[ScenarioRun]) -> Aggregates:
 
 
 def _block(runs: list[ScenarioRun]) -> MetricBlock:
-    faults = [run for run in runs if not run.clean]
-    controls = [run for run in runs if run.clean]
+    """Aggregate one scope; infrastructure errors are counted, never scored."""
+    infra_errors = sum(1 for run in runs if run.infra_error is not None)
+    scored = [run for run in runs if run.infra_error is None]
+    faults = [run for run in scored if not run.clean]
+    controls = [run for run in scored if run.clean]
     pr_expected = [run for run in faults if run.expected_resolution == ResolutionType.PR.value]
     column_scoped = [run for run in faults if run.rc_columns_correct is not None]
+    detection_success = sum(1 for run in faults if run.detected is True)
+    category_success = sum(1 for run in faults if run.rc_category_correct is True)
+    columns_success = sum(1 for run in column_scoped if run.rc_columns_correct is True)
+    resolution_success = sum(1 for run in faults if run.resolution_correct is True)
+    fix_success = sum(1 for run in pr_expected if run.verifier_passed is True)
+    semantic_success = sum(1 for run in pr_expected if run.semantically_correct is True)
+    false_positive_success = sum(1 for run in controls if run.false_positive is True)
 
     return MetricBlock(
-        scenarios=len(runs),
+        scenarios=len(scored),
         faults=len(faults),
         controls=len(controls),
-        detection_recall=_ratio(sum(1 for run in faults if run.detected is True), len(faults)),
-        rc_category_accuracy=_ratio(
-            sum(1 for run in faults if run.rc_category_correct is True), len(faults)
-        ),
-        rc_columns_accuracy=_ratio(
-            sum(1 for run in column_scoped if run.rc_columns_correct is True),
-            len(column_scoped),
-        ),
-        resolution_accuracy=_ratio(
-            sum(1 for run in faults if run.resolution_correct is True), len(faults)
-        ),
-        fix_validity_rate=_ratio(
-            sum(1 for run in pr_expected if run.verifier_passed is True), len(pr_expected)
-        ),
-        semantic_rate=_ratio(
-            sum(1 for run in pr_expected if run.semantically_correct is True), len(pr_expected)
-        ),
-        false_positive_rate=_ratio(
-            sum(1 for run in controls if run.false_positive is True), len(controls)
-        ),
+        column_scoped=len(column_scoped),
+        pr_expected=len(pr_expected),
+        detection_success=detection_success,
+        category_success=category_success,
+        columns_success=columns_success,
+        resolution_success=resolution_success,
+        fix_success=fix_success,
+        semantic_success=semantic_success,
+        false_positive_success=false_positive_success,
+        detection_recall=_ratio(detection_success, len(faults)),
+        rc_category_accuracy=_ratio(category_success, len(faults)),
+        rc_columns_accuracy=_ratio(columns_success, len(column_scoped)),
+        resolution_accuracy=_ratio(resolution_success, len(faults)),
+        fix_validity_rate=_ratio(fix_success, len(pr_expected)),
+        semantic_rate=_ratio(semantic_success, len(pr_expected)),
+        false_positive_rate=_ratio(false_positive_success, len(controls)),
         verified_but_wrong=sum(1 for run in pr_expected if run.verified_but_wrong),
-        errors=sum(1 for run in runs if run.error is not None),
+        infra_errors=infra_errors,
+        errors=sum(1 for run in scored if run.error is not None),
         total_cost_usd=round(sum(run.cost_usd for run in runs), 6),
         median_cost_usd=_median([run.cost_usd for run in runs]),
         p90_cost_usd=_p90([run.cost_usd for run in runs]),
@@ -266,4 +319,5 @@ __all__ = [
     "ScenarioRun",
     "aggregate",
     "score_scenario",
+    "wilson_interval",
 ]

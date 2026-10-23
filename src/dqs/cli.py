@@ -43,6 +43,8 @@ from dqs.agents.investigator import NODE_NAME, investigate
 from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.smoke import run_smoke
 from dqs.agents.steps import DbStepSink
+from dqs.bench.ledger import DEFAULT_LEDGER_PATH
+from dqs.bench.preflight import run_preflight
 from dqs.bench.report import load_run_file, render_markdown
 from dqs.bench.runner import RESULTS_DIR, BenchOptions, run_benchmark
 from dqs.checks.engine import CheckEngine
@@ -1311,6 +1313,17 @@ def bench_run(
     llm_retry_max_wait: float = typer.Option(
         90.0, "--llm-retry-max-wait", help="Total seconds a per-minute 429 may spend retrying."
     ),
+    repeats: int = typer.Option(
+        1, "--repeats", help="Run every selected scenario N times (flakiness check)."
+    ),
+    acknowledge_changes: str | None = typer.Option(
+        None,
+        "--acknowledge-changes",
+        help="Reason for running holdout/all after the code fingerprint changed.",
+    ),
+    token_ledger: Annotated[
+        Path | None, typer.Option("--token-ledger", help="Daily token ledger JSON path.")
+    ] = None,
     results_dir: Annotated[Path | None, typer.Option("--results-dir")] = None,
 ) -> None:
     """Run fault-injection scenarios against one model (dry-run publishing)."""
@@ -1327,6 +1340,9 @@ def bench_run(
         pause_seconds=pause,
         confirm_holdout=confirm_holdout,
         llm_retry_max_wait_seconds=llm_retry_max_wait,
+        repeats=repeats,
+        acknowledge_changes=acknowledge_changes,
+        ledger_path=(token_ledger or DEFAULT_LEDGER_PATH),
         results_dir=(results_dir or RESULTS_DIR),
     )
     try:
@@ -1347,6 +1363,21 @@ def bench_run(
         console.print(f"[yellow]stopped:[/yellow] {run.metadata.stop_reason}")
         if run.metadata.resume_hint:
             console.print(f"resume: {run.metadata.resume_hint}")
+
+
+@bench_app.command("preflight")
+def bench_preflight(
+    model: str | None = typer.Option(
+        None, "--model", help="Model to check; defaults to LLM_MODEL_BENCH."
+    ),
+) -> None:
+    """Read-only readiness checks before spending benchmark quota (no LLM calls)."""
+    settings = load_settings()
+    report = run_preflight(settings, model=model)
+    typer.echo(report.render())
+    if not report.ok:
+        _fail(DqsError("preflight failed; fix the FAIL lines before `dqs bench run`"))
+    typer.echo("preflight OK - safe to start a benchmark run")
 
 
 @bench_app.command("report")

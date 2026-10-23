@@ -184,7 +184,19 @@ def clone_database(settings: Settings, source: str, target: str) -> None:
         admin.dispose()
 
 
-def _template_meta(settings: Settings) -> dict[str, Any] | None:
+def template_exists(settings: Settings) -> bool:
+    """Read-only: is the cached `dqs_template` database present?"""
+    admin = admin_engine(settings)
+    try:
+        return _database_exists(admin, TEMPLATE_DB)
+    except SQLAlchemyError as exc:
+        raise DatabaseError(f"could not inspect template database: {exc}") from exc
+    finally:
+        admin.dispose()
+
+
+def template_meta(settings: Settings) -> dict[str, Any] | None:
+    """Read-only: the template's `dq.template_meta` row, or None when absent."""
     engine = dbmod.make_rw_engine(settings)
     try:
         with engine.connect() as conn:
@@ -321,7 +333,7 @@ def ensure_template(
 
     if exists and not force:
         template_settings = settings.model_copy(update={"pg_database": TEMPLATE_DB})
-        meta = _template_meta(template_settings)
+        meta = template_meta(template_settings)
         if (
             meta is not None
             and meta.get("content_hash") == digest
@@ -421,4 +433,6 @@ __all__ = [
     "drop_database",
     "ensure_template",
     "list_steward_databases",
+    "template_exists",
+    "template_meta",
 ]

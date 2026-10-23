@@ -14,7 +14,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dqs.bench.scoring import Aggregates, MetricBlock, ScenarioRun, aggregate
+from dqs.bench.scoring import (
+    Aggregates,
+    MetricBlock,
+    ScenarioRun,
+    aggregate,
+    wilson_interval,
+)
 
 
 class BenchMetadata(BaseModel):
@@ -29,9 +35,13 @@ class BenchMetadata(BaseModel):
     started_at: str
     finished_at: str
     git_sha: str
+    git_dirty: bool = False
+    code_fingerprint: str = ""
+    acknowledged_changes: str | None = None
     harness_version: str
     prompt_hashes: dict[str, str] = Field(default_factory=dict)
     settings: dict[str, Any] = Field(default_factory=dict)
+    repeats: int = 1
     dbt_after_load: bool = True
     daily_token_cap: int
     tpm_limit: int
@@ -64,8 +74,13 @@ class BenchRunFile(BaseModel):
         return aggregate(self.scenarios)
 
 
-def _percent(value: float | None) -> str:
-    return "n/a" if value is None else f"{value * 100:.1f}%"
+def _proportion(successes: int, n: int) -> str:
+    """`rate (k/n) [95% Wilson low-high]`; n is always visible, n=0 is n/a."""
+    interval = wilson_interval(successes, n)
+    if interval is None:
+        return "n/a (0/0)"
+    low, high = interval
+    return f"{successes / n * 100:.1f}% ({successes}/{n}) [{low * 100:.1f}-{high * 100:.1f}]"
 
 
 def _money(value: float) -> str:
@@ -78,19 +93,26 @@ def _seconds(value: float) -> str:
 
 _METRIC_HEADER = (
     "| scope | n | detection | RC category | RC columns | resolution | "
-    "fix valid | semantic | FP rate | errors | median cost | p90 cost | median wall | p90 wall |"
+    "fix valid | semantic | verified wrong | FP rate | infra | errors | "
+    "median cost | p90 cost | median wall | p90 wall |"
 )
-_METRIC_RULE = "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+_METRIC_RULE = "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 
 
 def _metric_row(scope: str, block: MetricBlock) -> str:
     return (
-        f"| {scope} | {block.scenarios} | {_percent(block.detection_recall)} | "
-        f"{_percent(block.rc_category_accuracy)} | {_percent(block.rc_columns_accuracy)} | "
-        f"{_percent(block.resolution_accuracy)} | {_percent(block.fix_validity_rate)} | "
-        f"{_percent(block.semantic_rate)} | {_percent(block.false_positive_rate)} | "
-        f"{block.errors} | {_money(block.median_cost_usd)} | {_money(block.p90_cost_usd)} | "
-        f"{_seconds(block.median_wall_s)} | {_seconds(block.p90_wall_s)} |"
+        f"| {scope} | {block.scenarios} | "
+        f"{_proportion(block.detection_success, block.faults)} | "
+        f"{_proportion(block.category_success, block.faults)} | "
+        f"{_proportion(block.columns_success, block.column_scoped)} | "
+        f"{_proportion(block.resolution_success, block.faults)} | "
+        f"{_proportion(block.fix_success, block.pr_expected)} | "
+        f"{_proportion(block.semantic_success, block.pr_expected)} | "
+        f"{_proportion(block.verified_but_wrong, block.pr_expected)} | "
+        f"{_proportion(block.false_positive_success, block.controls)} | "
+        f"{block.infra_errors} | {block.errors} | {_money(block.median_cost_usd)} | "
+        f"{_money(block.p90_cost_usd)} | {_seconds(block.median_wall_s)} | "
+        f"{_seconds(block.p90_wall_s)} |"
     )
 
 
@@ -104,10 +126,12 @@ def render_markdown(run: BenchRunFile) -> str:
         f"- run: `{meta.run_id}` ({meta.split})",
         f"- provider/model: `{meta.provider}` / `{meta.model}`",
         f"- started/finished: {meta.started_at} -> {meta.finished_at}",
-        f"- git: `{meta.git_sha}`",
+        f"- git: `{meta.git_sha}`" + (" (**dirty worktree**)" if meta.git_dirty else ""),
+        f"- code fingerprint: `{meta.code_fingerprint[:16] or 'unknown'}`",
         f"- harness: `{meta.harness_version}`",
         "- prompt hashes: "
         + ", ".join(f"`{name}={sha[:12]}`" for name, sha in sorted(meta.prompt_hashes.items())),
+        f"- repeats: {meta.repeats}",
         f"- catalogue: {meta.catalogue_size} scenarios "
         f"({meta.fault_count} faults, {meta.control_count} controls, "
         f"{meta.holdout_count} holdout)",
@@ -123,6 +147,8 @@ def render_markdown(run: BenchRunFile) -> str:
             f" (previous dev run: `{meta.previous_dev_run}`)" if meta.previous_dev_run else ""
         )
         lines.append(f"- prompts since last dev run: **{changed}**{previous}")
+    if meta.acknowledged_changes:
+        lines.append(f"- acknowledged code change: {meta.acknowledged_changes}")
     if meta.stop_reason:
         lines.append(f"- **stopped early:** {meta.stop_reason}")
     if meta.resume_hint:
@@ -147,11 +173,50 @@ def render_markdown(run: BenchRunFile) -> str:
         *(_metric_row(kind, block) for kind, block in aggregates.by_kind.items()),
     ]
 
+    infra = [run for run in run.scenarios if run.infra_error is not None]
+    if infra:
+        lines += [
+            "",
+            f"## Infrastructure errors ({len(infra)})",
+            "",
+            "Provider rate-limit/quota failures. They are excluded from every score "
+            "denominator and `--resume` re-runs them automatically.",
+            "",
+        ]
+        for result in infra:
+            lines.append(
+                f"- `{result.scenario_id}` repeat {result.repeat + 1}: {result.infra_error}"
+            )
+
+    repeated = [run for run in run.scenarios if run.repeat > 0]
+    if repeated:
+        lines += [
+            "",
+            "## Repeat stability",
+            "",
+            "| scenario | repeats | stability |",
+            "|---|---:|---|",
+        ]
+        by_scenario: dict[str, list[ScenarioRun]] = {}
+        for result in run.scenarios:
+            by_scenario.setdefault(result.scenario_id, []).append(result)
+        for scenario_id, results in sorted(by_scenario.items()):
+            if max(result.repeat for result in results) < 1:
+                continue
+            scored = [result for result in results if result.infra_error is None]
+            if len(scored) < 2:
+                stability = "n/a (infra errors)"
+            else:
+                outcomes = {_outcome_key(result) for result in scored}
+                stability = "stable" if len(outcomes) == 1 else "flaky"
+            lines.append(f"| `{scenario_id}` | {len(results)} | {stability} |")
+
     failures = [run for run in run.scenarios if run.error is not None]
     misses = [
         run
         for run in run.scenarios
         if not run.clean
+        and run.infra_error is None
         and (
             run.detected is not True
             or run.rc_category_correct is not True
@@ -169,6 +234,20 @@ def render_markdown(run: BenchRunFile) -> str:
                 f"resolution={result.actual_resolution} (expected {result.expected_resolution})"
             )
     return "\n".join(lines) + "\n"
+
+
+def _outcome_key(result: ScenarioRun) -> tuple[object, ...]:
+    """The scored outcome of one repeat; identical keys mean a stable scenario."""
+    return (
+        result.detected,
+        result.rc_category_correct,
+        result.rc_columns_correct,
+        result.resolution_correct,
+        result.verifier_passed,
+        result.semantically_correct,
+        result.false_positive,
+        result.error is not None,
+    )
 
 
 def load_run_file(payload: dict[str, Any]) -> BenchRunFile:

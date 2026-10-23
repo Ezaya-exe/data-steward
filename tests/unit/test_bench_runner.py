@@ -47,6 +47,7 @@ def _options(tmp_path: Path, **overrides: Any) -> runner.BenchOptions:
         "model": "test-model",
         "split": "dev",
         "results_dir": tmp_path,
+        "ledger_path": tmp_path / "token_ledger.json",
         "pause_seconds": 0.0,
     }
     payload.update(overrides)
@@ -59,6 +60,8 @@ def _result(
     tokens_in: int = 10,
     tokens_out: int = 5,
     error: str | None = None,
+    infra_error: str | None = None,
+    repeat: int = 0,
     cost: float = 0.001,
 ) -> ScenarioRun:
     scenario = get_scenario(scenario_id)
@@ -67,7 +70,9 @@ def _result(
         split=scenario.split.value,
         kind=scenario.kind,
         clean=scenario.is_control,
+        repeat=repeat,
         error=error,
+        infra_error=infra_error,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_usd=cost,
@@ -90,7 +95,7 @@ def _plain(calls: list[str], *, tokens: int = 10) -> Execute:
         **_kwargs: Any,
     ) -> ScenarioRun:
         calls.append(scenario.id)
-        return _result(scenario.id, tokens_in=tokens)
+        return _result(scenario.id, tokens_in=tokens, repeat=int(_kwargs.get("repeat", 0)))
 
     return fake
 
@@ -234,7 +239,12 @@ def test_holdout_requires_explicit_confirmation(
     assert not list(tmp_path.glob("*.json"))
 
 
-def _previous_dev_file(tmp_path: Path, prompt_hashes_value: dict[str, str]) -> Path:
+def _previous_dev_file(
+    tmp_path: Path,
+    prompt_hashes_value: dict[str, str],
+    *,
+    fingerprint: str | None = None,
+) -> Path:
     metadata = BenchMetadata(
         run_id="20251231T000000Z",
         model="test-model",
@@ -243,6 +253,7 @@ def _previous_dev_file(tmp_path: Path, prompt_hashes_value: dict[str, str]) -> P
         started_at="2025-12-31T00:00:00+00:00",
         finished_at="2025-12-31T01:00:00+00:00",
         git_sha="older",
+        code_fingerprint=fingerprint if fingerprint is not None else runner.code_fingerprint(),
         harness_version="8a.1",
         prompt_hashes=prompt_hashes_value,
         daily_token_cap=180_000,
@@ -308,7 +319,7 @@ def test_daily_token_cap_stops_before_starting_another_scenario(
     assert json.loads(path.read_text(encoding="utf-8"))["metadata"]["stop_reason"]
 
 
-def test_daily_quota_discards_the_scenario_and_stops(
+def test_daily_quota_is_recorded_as_infra_and_stops_immediately(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = ["f1-orders-status", "f2-customers-email"]
@@ -329,15 +340,20 @@ def test_daily_quota_discards_the_scenario_and_stops(
     run, path = runner.run_benchmark(settings, _options(tmp_path, ids=ids), sleep=lambda _s: None)
 
     assert calls == ids
-    assert [result.scenario_id for result in run.scenarios] == [ids[0]]
-    assert run.metadata.discarded_scenarios == [ids[1]]
+    assert [result.scenario_id for result in run.scenarios] == ids
+    assert run.scenarios[1].infra_error is not None
+    assert "daily" in run.scenarios[1].infra_error.lower()
     assert run.metadata.stop_reason is not None
     assert "daily provider quota" in run.metadata.stop_reason
-    assert run.metadata.tokens_total == 15  # only the completed scenario
+    assert run.metadata.tokens_total == 15  # only the completed scenario's tokens
+    assert run.aggregates().overall.scenarios == 1  # infra failures are not scored
+    assert run.aggregates().overall.infra_errors == 1
+    assert run.metadata.discarded_scenarios == []
     assert (tmp_path / "latest.md").exists()
-    assert json.loads(path.read_text(encoding="utf-8"))["metadata"]["discarded_scenarios"] == [
-        ids[1]
-    ]
+    assert (
+        "daily provider quota"
+        in json.loads(path.read_text(encoding="utf-8"))["metadata"]["stop_reason"]
+    )
 
 
 def test_non_quota_errors_are_recorded_not_dropped(
@@ -362,10 +378,32 @@ def test_non_quota_errors_are_recorded_not_dropped(
     assert run.aggregates().overall.errors == 1
 
 
-def test_live_github_mode_is_refused(settings: Settings, tmp_path: Path) -> None:
+def test_live_github_mode_is_forced_to_dry_run(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     live = settings.model_copy(update={"github_mode": "live"})
-    with pytest.raises(runner.BenchError, match="GITHUB_MODE=dry_run"):
-        runner.run_benchmark(live, _options(tmp_path, ids=["f1-orders-status"]))
+    seen: list[str] = []
+    calls: list[str] = []
+
+    def fake(
+        effective: Settings,
+        _options: runner.BenchOptions,
+        scenario: Any,
+        **_kwargs: Any,
+    ) -> ScenarioRun:
+        seen.append(effective.github_mode)
+        calls.append(scenario.id)
+        return _result(scenario.id)
+
+    _install(monkeypatch, fake)
+    run, path = runner.run_benchmark(live, _options(tmp_path, ids=["f1-orders-status"]))
+
+    assert calls == ["f1-orders-status"]
+    assert seen == ["dry_run"], "the benchmark always owns the effective GitHub mode"
+    metadata = json.loads(path.read_text(encoding="utf-8"))["metadata"]
+    assert metadata["settings"]["github_mode_env"] == "live"
+    assert metadata["settings"]["github_mode"] == "dry_run"
+    assert metadata["settings"]["github_mode_forced"] is True
 
 
 def test_missing_contracts_are_refused(
@@ -490,3 +528,141 @@ def test_execute_scenario_rejects_the_warehouse_name_before_touching_postgres(
 ) -> None:
     with pytest.raises(DatabaseError):
         runner.fast_reset.clone_database(settings, "dqs_template", "warehouse")
+
+
+def test_two_consecutive_infra_errors_trip_the_circuit_breaker(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = ["f1-orders-status", "f2-customers-email", "f4-orders-status-20"]
+    calls: list[str] = []
+
+    def fake(
+        _settings: Settings,
+        _options: runner.BenchOptions,
+        scenario: Any,
+        **_kwargs: Any,
+    ) -> ScenarioRun:
+        calls.append(scenario.id)
+        return _result(scenario.id, infra_error="HTTP 429 rate limit after retries")
+
+    _install(monkeypatch, fake)
+    run, path = runner.run_benchmark(settings, _options(tmp_path, ids=ids), sleep=lambda _s: None)
+
+    assert calls == ids[:2]
+    assert run.metadata.stop_reason is not None
+    assert "circuit breaker" in run.metadata.stop_reason
+    assert run.metadata.resume_hint is not None
+    assert "--resume" in run.metadata.resume_hint
+    assert run.aggregates().overall.infra_errors == 2
+    assert run.aggregates().overall.scenarios == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["metadata"]["stop_reason"]
+
+    # A resume re-runs infra records automatically (they were never scored).
+    resumed_calls: list[str] = []
+    _install(monkeypatch, _plain(resumed_calls))
+    resumed, same_path = runner.run_benchmark(
+        settings, _options(tmp_path, ids=ids, resume=path), sleep=lambda _s: None
+    )
+    assert same_path == path
+    assert resumed_calls == ids
+    assert [result.scenario_id for result in resumed.scenarios] == ids
+    assert all(result.infra_error is None for result in resumed.scenarios)
+
+
+def test_daily_token_ledger_accumulates_across_invocations(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger_path = tmp_path / "token_ledger.json"
+    ledger_path.unlink(missing_ok=True)
+    first_calls: list[str] = []
+    _install(monkeypatch, _plain(first_calls, tokens=100))
+    _first, _path = runner.run_benchmark(
+        settings,
+        _options(tmp_path, ids=["f1-orders-status"], ledger_path=ledger_path),
+        sleep=lambda _s: None,
+    )
+    payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert sum(payload["days"][next(iter(payload["days"]))].values()) == 105
+
+    second_calls: list[str] = []
+    progress: list[str] = []
+    _install(monkeypatch, _plain(second_calls, tokens=100))
+    run, _ = runner.run_benchmark(
+        settings,
+        _options(
+            tmp_path,
+            ids=["f2-customers-email"],
+            ledger_path=ledger_path,
+            daily_token_cap=105,
+        ),
+        progress=progress.append,
+        sleep=lambda _s: None,
+    )
+    assert second_calls == [], "the ledger must account for the earlier invocation"
+    assert run.metadata.stop_reason is not None
+    assert "daily token cap" in run.metadata.stop_reason
+    assert any("token ledger: 105" in line for line in progress)
+
+
+def test_repeats_run_each_scenario_n_times_with_distinct_keys(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake(
+        _settings: Settings,
+        _options: runner.BenchOptions,
+        scenario: Any,
+        **kwargs: Any,
+    ) -> ScenarioRun:
+        repeat = int(kwargs["repeat"])
+        calls.append((scenario.id, repeat))
+        return _result(scenario.id, repeat=repeat)
+
+    _install(monkeypatch, fake)
+    run, path = runner.run_benchmark(
+        settings,
+        _options(tmp_path, ids=["f1-orders-status"], repeats=3),
+        sleep=lambda _s: None,
+    )
+    assert calls == [("f1-orders-status", 0), ("f1-orders-status", 1), ("f1-orders-status", 2)]
+    assert [result.repeat for result in run.scenarios] == [0, 1, 2]
+    assert run.metadata.repeats == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["metadata"]["repeats"] == 3
+
+
+def test_resume_refuses_a_different_repeat_count(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(monkeypatch, _plain([]))
+    _run, path = runner.run_benchmark(
+        settings,
+        _options(tmp_path, ids=["f1-orders-status"], repeats=2),
+        sleep=lambda _s: None,
+    )
+    with pytest.raises(runner.BenchError, match="repeats"):
+        runner.run_benchmark(
+            settings,
+            _options(tmp_path, ids=["f1-orders-status"], repeats=3, resume=path),
+            sleep=lambda _s: None,
+        )
+
+
+def test_holdout_refuses_a_changed_fingerprint_unless_acknowledged(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _previous_dev_file(tmp_path, prompt_hashes(), fingerprint="f" * 64)
+    calls: list[str] = []
+    _install(monkeypatch, _plain(calls))
+    options = _options(tmp_path, split="holdout", ids=["f7-orders-total-100"], confirm_holdout=True)
+    with pytest.raises(runner.BenchError, match="fingerprint changed"):
+        runner.run_benchmark(settings, options, sleep=lambda _s: None)
+    assert calls == []
+
+    run, _path = runner.run_benchmark(
+        settings,
+        options.model_copy(update={"acknowledge_changes": "refactored the runner"}),
+        sleep=lambda _s: None,
+    )
+    assert calls == ["f7-orders-total-100"]
+    assert run.metadata.acknowledged_changes == "refactored the runner"
