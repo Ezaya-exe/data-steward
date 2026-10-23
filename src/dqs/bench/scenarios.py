@@ -93,6 +93,12 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
         Split.DEV,
         ["email", "email_address"],
     ),
+    (
+        "f1-order-items-quantity",
+        "column_rename:order_items.quantity:new_name=qty",
+        Split.DEV,
+        ["quantity", "qty"],
+    ),
     # F2 column_removed
     ("f2-orders-status", "column_removed:orders.status", Split.HOLDOUT, ["status"]),
     ("f2-customers-email", "column_removed:customers.email", Split.DEV, ["email"]),
@@ -102,6 +108,12 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
         "column_removed:order_items.quantity",
         Split.DEV,
         ["quantity"],
+    ),
+    (
+        "f2-order-items-unit-price",
+        "column_removed:order_items.unit_price",
+        Split.DEV,
+        ["unit_price"],
     ),
     # F3 type_change
     (
@@ -150,6 +162,18 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
         Split.DEV,
         ["quantity"],
     ),
+    (
+        "f4-orders-customer-20",
+        "null_spike:orders.customer_id:fraction=0.2",
+        Split.DEV,
+        ["customer_id"],
+    ),
+    (
+        "f4-order-items-unit-price-35",
+        "null_spike:order_items.unit_price:fraction=0.35",
+        Split.DEV,
+        ["unit_price"],
+    ),
     # F5 orphan_keys (only the documented FK pairs)
     (
         "f5-orders-customer-35",
@@ -176,6 +200,12 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
         ["order_id"],
     ),
     (
+        "f5-payments-order-35",
+        "orphan_keys:payments.order_id:fraction=0.35",
+        Split.DEV,
+        ["order_id"],
+    ),
+    (
         "f5-order-items-product-35",
         "orphan_keys:order_items.product_id:fraction=0.35",
         Split.DEV,
@@ -185,6 +215,7 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
     ("f6-orders-03", "duplicate_rows:orders:fraction=0.03", Split.DEV, []),
     ("f6-orders-08", "duplicate_rows:orders:fraction=0.08", Split.HOLDOUT, []),
     ("f6-order-items-05", "duplicate_rows:order_items:fraction=0.05", Split.DEV, []),
+    ("f6-order-items-03", "duplicate_rows:order_items:fraction=0.03", Split.DEV, []),
     ("f6-payments-15", "duplicate_rows:payments:fraction=0.15", Split.DEV, []),
     ("f6-customers-08", "duplicate_rows:customers:fraction=0.08", Split.DEV, []),
     ("f6-order-items-15", "duplicate_rows:order_items:fraction=0.15", Split.DEV, []),
@@ -218,6 +249,7 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
     ("f8-customers-30", "late_batch:customers:hours=30", Split.DEV, []),
     ("f8-payments-48", "late_batch:payments:hours=48", Split.DEV, []),
     ("f8-order-items-24", "late_batch:order_items:hours=24", Split.DEV, []),
+    ("f8-order-items-30", "late_batch:order_items:hours=30", Split.DEV, []),
     # F9 missing_table — every F9 case is holdout
     ("f9-customers", "missing_table:customers", Split.HOLDOUT, []),
     ("f9-orders", "missing_table:orders", Split.HOLDOUT, []),
@@ -247,6 +279,12 @@ _FAULT_ROWS: Final[tuple[tuple[str, str, Split, list[str]], ...]] = (
         "column_added:order_items:new_column=extra_note",
         Split.DEV,
         ["extra_note"],
+    ),
+    (
+        "f10-orders-source",
+        "column_added:orders:new_column=source_system",
+        Split.DEV,
+        ["source_system"],
     ),
 )
 

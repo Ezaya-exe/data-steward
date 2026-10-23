@@ -293,6 +293,11 @@ def test_three_fake_llm_scenarios_run_end_to_end_and_leave_no_databases(
     assert run.metadata.tokens_total == sum(
         result.tokens_in + result.tokens_out for result in run.scenarios
     )
+    print(
+        "scenario wall_s: "
+        + ", ".join(f"{result.scenario_id}={result.wall_s:.1f}s" for result in run.scenarios)
+        + f"; total={run.metadata.wall_s_total:.1f}s"
+    )
 
     # Every scenario database was dropped by the runner itself; only the
     # module-scoped test template remains until its fixture tears down.

@@ -7,7 +7,9 @@ and byte-identical proof live in `tests/integration/test_fast_reset.py`.
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -121,3 +123,43 @@ def test_demo_always_clones_the_cached_template(monkeypatch: pytest.MonkeyPatch)
     assert demo.ensure_demo_database(SETTINGS, reset=True) is True
     # The demo never reuses a dirty database: each call is a fresh clone.
     assert calls == [("warehouse", demo.DEMO_DB), ("warehouse", demo.DEMO_DB)]
+
+
+def test_seed_baseline_loads_every_day_then_builds_dbt_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 8a: 30 loads + ONE build, not 30 build/load cycles (DECISIONS 120)."""
+    from dqs.sim import pipeline
+
+    loaded: list[object] = []
+    builds: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        pipeline.dbmod, "make_rw_engine", lambda _settings: SimpleNamespace(dispose=lambda: None)
+    )
+    monkeypatch.setattr(
+        pipeline.generator,
+        "tables_for_date",
+        lambda business_date, _seed: {"orders": business_date},
+    )
+
+    def fake_load(engine: object, business_date: object, batch: object) -> dict[str, int]:
+        _ = engine, batch
+        loaded.append(business_date)
+        return {"orders": 1}
+
+    def fake_build(_settings: Settings, **kwargs: object) -> tuple[int, str]:
+        builds.append(kwargs)
+        return 0, "ok"
+
+    monkeypatch.setattr(pipeline.loader, "load_batch", fake_load)
+    monkeypatch.setattr(pipeline.dbt_run, "run_dbt_build", fake_build)
+
+    results = pipeline.seed_baseline(SETTINGS, 3, 42, run_dbt=True)
+
+    assert len(loaded) == 3
+    assert len(builds) == 1
+    assert builds[0]["batch_id"] == pipeline.loader.batch_id_for_date(
+        pipeline.BASELINE_START + dt.timedelta(days=2)
+    )
+    assert [result["dbt_exit"] for result in results] == [None, None, 0]
