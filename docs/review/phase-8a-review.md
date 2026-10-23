@@ -191,11 +191,11 @@ counting fault scenarios only (controls make no LLM calls):
 | all faults | 53 | 1,208,400 | 6.0 | 7 |
 
 Caveats: the three totals are single runs with no retries/failures and no
-repeats; the average hides the F4 investigator-only point; the 200K cap is a
-local policy, not a provider guarantee. Treat 4.2/1.8 days as an order-of-
-magnitude planning number, not a measurement. The `dev` 43-scenario run also
-spends wall time on six controls (clone, load, dbt, monitor) with zero LLM
-tokens.
+repeats, and the average mixes `gpt-oss-120b` (F1/F3) with `gpt-oss-20b` (F6);
+the average hides the F4 investigator-only point; the 200K cap is a local
+policy, not a provider guarantee. Treat 4.2/1.8 days as an order-of-magnitude
+planning number, not a measurement. The `dev` 43-scenario run also spends wall
+time on six controls (clone, load, dbt, monitor) with zero LLM tokens.
 
 ## What the reviewer should poke at
 
