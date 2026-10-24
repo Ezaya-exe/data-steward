@@ -886,3 +886,34 @@ entry each; newest last.
      labelled "estimated at list price; free tier used, nothing was billed".
      Scoring, scenarios, the oracle, prompts, tools and the fingerprint inputs
      are untouched.
+
+---
+
+## Phase 7 - Streamlit UI (2026-10-25)
+
+136. **The UI reads through `dqs/services.py`, and resume is its only write.**
+     `services.py` wraps the existing public functions (`list_incidents`,
+     `get_incident`, `load_contracts`, `render_markdown`) and adds parameterized
+     reads for `dq.agent_steps`, `dq.fix_attempts` and `dq.publications`, whose
+     only existing readers are private/CLI-specific. Pages never open an engine
+     or contain SQL. Reads use the `dqs_ro` engine; `decide_incident` checks
+     `awaiting_approval` in the service (not in the page) and then calls
+     `IncidentWorkflow.resume` on the r/w engine. The UI never calls an LLM or
+     GitHub by itself.
+137. **The sidebar offers only the warehouse and `dqs_demo`.** Benchmark
+     scenario databases (`dqs_bench_*`) and `dqs_template` are never listed or
+     selectable: a human click must not move the console onto a database a
+     benchmark is observing. `dqs_demo` is the default when it exists, otherwise
+     `warehouse`. This is narrower than "any steward database" on purpose.
+138. **The Benchmark page reuses `render_markdown` instead of re-deriving
+     tables.** The generated report already contains the overall and
+     per-fault-kind tables with exact numerators, n and 95% Wilson intervals;
+     the page adds only the caveats (pilot catalogue <=10 scenarios, incomplete
+     repeat count, `stop_reason`, infra errors, dirty tree). It renders the
+     report with `st.markdown(..., unsafe_allow_html=False)`; all incident,
+     root-cause, evidence and diff text is plain `st.text`/`st.code`/
+     `st.dataframe`. File-based `ui/pages/*.py` is used because Streamlit 1.66's
+     `AppTest.switch_page` targets page files. Tests inject a fake service and
+     settings through session state (`_dqs_service`, `_dqs_settings`); production
+     falls back to the real module and `.env`, so there is no test-only branch in
+     the data layer.

@@ -1,15 +1,21 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-23 (Phase 8b preparation complete; real benchmark not run)
+Last updated: 2026-10-25 (Phase 7 Streamlit UI complete; real benchmark not run)
 · Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **Phase 7 (Streamlit review console) is complete.** `streamlit run ui/app.py`
+  serves Incidents, Incident detail, Contracts and Benchmark pages against
+  `dqs_demo` (default) or the warehouse. It is read-only except approve/reject,
+  which checks `awaiting_approval` and resumes an existing checkpoint; the UI
+  itself never calls an LLM or GitHub. Report: `docs/phase-notes/phase-7.md`;
+  DECISIONS 136–138. Screenshots are listed in the note and still need manual
+  capture into `docs/img/`.
 - **Phase 8b preparation is complete; no real benchmark has been run.** The
-  owner's next action is the runbook pilot in `docs/BENCH_RUNBOOK.md` §2, then
-  the first dev run. Do not start Phase 7 (Streamlit) or a full benchmark
-  unasked.
+  owner's next action is still the runbook pilot in `docs/BENCH_RUNBOOK.md` §2,
+  then the first dev run. Do not start a full benchmark unasked.
 - **Phase 8b prep deliverables**: `bench/preflight.py` (`dqs bench preflight`,
   read-only PASS/FAIL); `bench/ledger.py` (per-UTC-day token ledger at
   `data/token_ledger.json`); `bench/harness.py` (`code_fingerprint`,
@@ -267,6 +273,15 @@ $env:RUN_LLM_TESTS='1'
 .venv\Scripts\dqs bench report                                       # newest results JSON
 .venv\Scripts\dqs bench run --split dev --resume benchmarks\results\<file>.json
 # holdout requires --confirm-holdout and must not guide prompt tuning.
+
+# Phase 7 flow — Streamlit review console. Read-only except approve/reject;
+# the UI never calls an LLM or GitHub by itself. Start it while Postgres is up.
+.venv\Scripts\python -m streamlit run ui/app.py
+# sidebar database: dqs_demo by default when it exists, otherwise warehouse;
+# benchmark scenario databases and dqs_template are deliberately hidden.
+# pages: Incidents | Incident detail | Contracts | Benchmark
+# AppTest smoke tests (no Docker/LLM needed):
+.venv\Scripts\python -m pytest tests\unit\test_services.py tests\unit\test_ui_pages.py -q
 ```
 
 Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists because
@@ -466,10 +481,20 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   `dqs impact`, the Phase-4a LLM/tool layer, the Phase-4b investigator, the
   Phase-5a deterministic sandbox verification, the Phase-5b fixer/issue/
   plan-fix path, the Phase-6a publish package, the Phase-6b workflow/demo, the
-  Phase-8a benchmark backend and the Phase-8b preparation (preflight, ledger,
-  fingerprint, infra handling, repeats, Wilson report) all work and are tested.
-  Phase 7 (Streamlit) is not started; **no real benchmark run has been
+  Phase-8a benchmark backend, the Phase-8b preparation (preflight, ledger,
+  fingerprint, infra handling, repeats, Wilson report) and the Phase-7
+  Streamlit console all work and are tested. **No real benchmark run has been
   performed** (Phase 8b run is the owner's next decision).
+- The Streamlit console has no authentication and is intended to run locally;
+  anyone who can reach the port can approve an incident. Approval requires the
+  SQLite checkpoint written by `dqs incident run`/`dqs demo`; a missing or
+  foreign checkpoint surfaces as a workflow error. There is no
+  edit-before-approve (still a stretch goal), and root-cause confidence remains
+  model-reported/uncalibrated.
+- Benchmark-page numbers are the report's sampling intervals from one run, not
+  a model comparison. Pilot files (catalogue <=10), an early `stop_reason`,
+  incomplete repeat counts, infra errors and a dirty tree are shown as visible
+  warnings before the tables.
 - Publication now uses a `pending` → `done` lifecycle with a unique
   `(incident_id, kind)` key (DECISIONS 113) and a deterministic branch/issue
   marker for retry. The remaining gap is concurrency: `find` + `begin` is not a
