@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dqs.config import Settings
+from dqs.config import Settings, estimate_cost_usd, price_for_model
 
 # every env var Settings may read — cleared so defaults are observable even on
 # a shell where the user set something globally
@@ -116,3 +116,11 @@ def test_database_urls_use_psycopg_and_both_roles(clean_env: pytest.MonkeyPatch)
     assert rw.drivername == "postgresql+psycopg"
     assert rw.username == "dqs" and rw.port == 5433 and rw.database == "warehouse"
     assert ro.username == "dqs_ro" and ro.password == "dqs_ro"
+
+
+def test_groq_gpt_oss_120b_list_price_is_in_the_table() -> None:
+    """Groq list price checked 2026-10-25: $0.15 in / $0.60 out per 1M tokens."""
+    assert price_for_model("openai/gpt-oss-120b") == (0.15, 0.60)
+    assert price_for_model("OpenAI/GPT-OSS-120B") == (0.15, 0.60)
+    assert estimate_cost_usd("openai/gpt-oss-120b", 1_000_000, 1_000_000) == pytest.approx(0.75)
+    assert price_for_model("some-unlisted-model") is None

@@ -27,6 +27,10 @@ GITHUB_MODES = frozenset({"dry_run", "live"})
 # `Settings` overrides them when a provider changes its list price. An unknown
 # model costs 0.0 and is labelled as unpriced in the results metadata.
 LLM_PRICE_TABLE: dict[str, tuple[float, float]] = {
+    # Groq list price, checked 2026-10-25 against console.groq.com/docs/models
+    # (the requested 2026-10-23 price is unchanged). Reports re-price stored
+    # token counts with this table, so editing it also updates old results.
+    "openai/gpt-oss-120b": (0.15, 0.60),
     "claude-sonnet-4": (3.0, 15.0),
     "claude-sonnet": (3.0, 15.0),
     "claude-haiku": (1.0, 5.0),

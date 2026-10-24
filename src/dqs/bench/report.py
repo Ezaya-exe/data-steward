@@ -21,6 +21,12 @@ from dqs.bench.scoring import (
     aggregate,
     wilson_interval,
 )
+from dqs.config import estimate_cost_usd, price_for_model
+
+# Every dollar figure in the report is a list-price estimate, never an invoice:
+# benchmark runs used provider free tiers. Keep the exact wording in one place
+# so a new cost column cannot be added without the disclaimer.
+_COST_LABEL = "estimated at list price; free tier used, nothing was billed"
 
 
 class BenchMetadata(BaseModel):
@@ -87,6 +93,46 @@ def _money(value: float) -> str:
     return f"${value:.4f}"
 
 
+def _rate(value: float) -> str:
+    """A list price without trailing zeros (`0.15`, `0.6`, `3`)."""
+    return f"${value:g}"
+
+
+def _repriced_scenarios(model: str, scenarios: list[ScenarioRun]) -> list[ScenarioRun]:
+    """Re-price every record from its stored tokens with the current price table.
+
+    Costs are deliberately not trusted from the results JSON: a price-table edit
+    must also update files produced before the edit (the pilot run stored 0.0
+    because it used a free tier). Scoring itself is untouched; only the cost
+    field on a copy is replaced.
+    """
+    return [
+        run.model_copy(
+            update={
+                "cost_usd": round(
+                    estimate_cost_usd(model, run.tokens_in, run.tokens_out),
+                    6,
+                )
+            }
+        )
+        for run in scenarios
+    ]
+
+
+def _cost_totals(scenarios: list[ScenarioRun]) -> tuple[int, float]:
+    """(tokens_in + tokens_out, estimated cost) over the records being reported."""
+    tokens = sum(run.tokens_in + run.tokens_out for run in scenarios)
+    cost = sum(run.cost_usd for run in scenarios)
+    return tokens, cost
+
+
+def _pricing_line(model: str) -> str:
+    price = price_for_model(model)
+    if price is None:
+        return "- pricing: no list price configured for this model; cost columns show $0.0000"
+    return f"- pricing: {_rate(price[0])}/1M input, {_rate(price[1])}/1M output - {_COST_LABEL}"
+
+
 def _seconds(value: float) -> str:
     return f"{value:.1f}s"
 
@@ -94,7 +140,7 @@ def _seconds(value: float) -> str:
 _METRIC_HEADER = (
     "| scope | n | detection | RC category | RC columns | resolution | "
     "fix valid | semantic | verified wrong | FP rate | infra | errors | "
-    "median cost | p90 cost | median wall | p90 wall |"
+    "median est. cost | p90 est. cost | median wall | p90 wall |"
 )
 _METRIC_RULE = "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 
@@ -119,7 +165,11 @@ def _metric_row(scope: str, block: MetricBlock) -> str:
 def render_markdown(run: BenchRunFile) -> str:
     """The `latest.md` report: provenance, overall/per-kind metrics, failures."""
     meta = run.metadata
-    aggregates = run.aggregates()
+    # Costs are recomputed here, not read from the file, so editing
+    # `LLM_PRICE_TABLE` also reprices results written before the edit.
+    priced = _repriced_scenarios(meta.model, run.scenarios)
+    aggregates = aggregate(priced)
+    tokens_total, cost_total = _cost_totals(priced)
     lines = [
         f"# Benchmark - {meta.model}",
         "",
@@ -138,7 +188,8 @@ def render_markdown(run: BenchRunFile) -> str:
         f"- dbt after load: {meta.dbt_after_load}",
         f"- limits: daily cap {meta.daily_token_cap} tokens, TPM {meta.tpm_limit}, "
         f"retry max wait {meta.llm_retry_max_wait_seconds:.0f}s",
-        f"- totals: {meta.tokens_total} tokens, {_money(meta.cost_usd_total)} (estimate), "
+        _pricing_line(meta.model),
+        f"- totals: {tokens_total} tokens, {_money(cost_total)} - {_COST_LABEL}, "
         f"{_seconds(meta.wall_s_total)}",
     ]
     if meta.prompt_changed_since_last_dev is not None:
@@ -157,8 +208,9 @@ def render_markdown(run: BenchRunFile) -> str:
         lines.append(f"- discarded: {', '.join(meta.discarded_scenarios)}")
     lines += [
         "",
-        "All percentages are deterministic comparisons against the scenario answer key; "
-        "cost is a token-price estimate, not a provider invoice.",
+        "All percentages are deterministic comparisons against the scenario answer key. "
+        f"Every cost figure is recomputed from each record's stored input/output tokens and is "
+        f"{_COST_LABEL}.",
         "",
         "## Overall",
         "",

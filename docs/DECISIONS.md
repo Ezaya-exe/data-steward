@@ -874,3 +874,15 @@ entry each; newest last.
      the stop-message meanings, the model/harness change procedure and Windows
      power settings. The pilot is an operational smoke test, not a benchmark
      result.
+135. **Benchmark cost is recomputed at report time from stored tokens.** The
+     results JSON keeps the token counts, but the markdown report does not
+     trust its saved `cost_usd` values. `render_markdown` re-prices every
+     `ScenarioRun` with `estimate_cost_usd` before aggregating, so editing
+     `LLM_PRICE_TABLE` also updates files written by older runs. The table now
+     includes `openai/gpt-oss-120b` at Groq's list price of $0.15 input and
+     $0.60 output per 1M tokens (checked 2026-10-25; unchanged from the
+     requested 2026-10-23 price). The pilot file therefore reports a non-zero
+     estimate (198229 tokens -> $0.0395) without a new run. Every cost is
+     labelled "estimated at list price; free tier used, nothing was billed".
+     Scoring, scenarios, the oracle, prompts, tools and the fingerprint inputs
+     are untouched.

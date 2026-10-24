@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from dqs.bench.report import BenchMetadata, BenchRunFile, load_run_file, render_markdown
 from dqs.bench.scoring import ScenarioRun
+from dqs.config import LLM_PRICE_TABLE
 
 
 def _metadata(**overrides: object) -> BenchMetadata:
@@ -191,6 +192,35 @@ def test_markdown_reports_stable_and_flaky_repeats() -> None:
     assert "## Repeat stability" in markdown
     assert "| `f1-orders-status` | 3 | stable |" in markdown
     assert "| `f4-orders-status-20` | 3 | flaky |" in markdown
+
+
+def test_markdown_recomputes_cost_from_stored_tokens_with_the_price_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saved `cost_usd` is ignored: a price-table change must reprice old files."""
+    run = BenchRunFile(
+        metadata=_metadata(model="openai/gpt-oss-120b"),
+        scenarios=[
+            ScenarioRun(
+                scenario_id="f1-orders-status",
+                split="dev",
+                kind="column_rename",
+                clean=False,
+                tokens_in=1_000_000,
+                tokens_out=1_000_000,
+                cost_usd=999.0,  # stale/incorrect value in the file must not be used
+            )
+        ],
+    )
+    markdown = render_markdown(run)
+    assert "$999" not in markdown
+    assert "$0.7500" in markdown
+    assert "pricing: $0.15/1M input, $0.6/1M output" in markdown
+    assert "estimated at list price; free tier used, nothing was billed" in markdown
+
+    # Editing the table must change the same old results file's estimate.
+    monkeypatch.setitem(LLM_PRICE_TABLE, "openai/gpt-oss-120b", (1.0, 2.0))
+    assert "$3.0000" in render_markdown(run)
 
 
 def test_markdown_lists_infrastructure_errors_separately() -> None:
