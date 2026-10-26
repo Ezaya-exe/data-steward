@@ -124,3 +124,14 @@ def test_groq_gpt_oss_120b_list_price_is_in_the_table() -> None:
     assert price_for_model("OpenAI/GPT-OSS-120B") == (0.15, 0.60)
     assert estimate_cost_usd("openai/gpt-oss-120b", 1_000_000, 1_000_000) == pytest.approx(0.75)
     assert price_for_model("some-unlisted-model") is None
+
+
+def test_llm_model_price_entry_wins_over_generic_deepseek_prefix() -> None:
+    """The configured LLM_MODEL has its own router price: $0.07 in / $0.30 out."""
+    assert price_for_model("deepseek/deepseek-v4.1-flash") == (0.07, 0.30)
+    assert price_for_model("DeepSeek/DeepSeek-V4.1-Flash") == (0.07, 0.30)
+    assert estimate_cost_usd("deepseek/deepseek-v4.1-flash", 1_000_000, 1_000_000) == (
+        pytest.approx(0.37)
+    )
+    # Other DeepSeek models keep the generic fallback price.
+    assert price_for_model("deepseek-chat") == (0.27, 1.1)

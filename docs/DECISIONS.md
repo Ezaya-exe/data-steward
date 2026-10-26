@@ -917,3 +917,19 @@ entry each; newest last.
      settings through session state (`_dqs_service`, `_dqs_settings`); production
      falls back to the real module and `.env`, so there is no test-only branch in
      the data layer.
+
+---
+
+## Price table maintenance (2026-10-26)
+
+139. **The configured `LLM_MODEL` gets its own price entry, ahead of the generic
+     provider prefix.** `LLM_PRICE_TABLE` gains
+     `deepseek/deepseek-v4.1-flash` at $0.07 input / $0.30 output per 1M tokens
+     (the owner's router page on 2026-10-26; the owner will correct the numbers
+     if they differ). The table already matched `deepseek/...` through the
+     generic `deepseek` entry ($0.27/$1.10), so the specific key is required:
+     `price_for_model` picks the longest matching prefix, and without it report
+     re-pricing (DECISIONS 135) would overstate this model's cost. Other
+     DeepSeek models keep the generic fallback. `config.py` and the unit test
+     are outside the code-fingerprint inputs, so the frozen fingerprint stays
+     `17ac403b...`; no benchmark, demo, LLM or GitHub call was made.

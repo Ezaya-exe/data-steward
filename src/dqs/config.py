@@ -31,6 +31,10 @@ LLM_PRICE_TABLE: dict[str, tuple[float, float]] = {
     # (the requested 2026-10-23 price is unchanged). Reports re-price stored
     # token counts with this table, so editing it also updates old results.
     "openai/gpt-oss-120b": (0.15, 0.60),
+    # Owner's router list price for the model in LLM_MODEL, per 1M tokens
+    # (provided 2026-10-26; the owner will confirm the final numbers). More
+    # specific than the generic `deepseek` entry, so prefix matching picks it.
+    "deepseek/deepseek-v4.1-flash": (0.07, 0.30),
     "claude-sonnet-4": (3.0, 15.0),
     "claude-sonnet": (3.0, 15.0),
     "claude-haiku": (1.0, 5.0),
