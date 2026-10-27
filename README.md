@@ -88,8 +88,10 @@ flowchart LR
   VERIFY -.-> SCORE
 ```
 
-Every solid box is code. The two LLM boxes (investigator, fixer) produce typed
-data; they never execute SQL, edit files, push commits, or open PRs.
+The two LLM boxes (investigator, fixer) are the only model-driven steps.
+Everything else — checks, graph traversal, patch application, verification,
+scoring and publishing — is code or data. The LLM never executes SQL, edits
+files, pushes commits, or opens PRs.
 
 ## Design principle
 
