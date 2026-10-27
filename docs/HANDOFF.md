@@ -28,9 +28,11 @@ docs/ARCHITECTURE.md is design.
   itself never calls an LLM or GitHub. Report: `docs/phase-notes/phase-7.md`;
   DECISIONS 136–138. Screenshots are listed in the note and still need manual
   capture into `docs/img/`.
-- **Phase 8b preparation is complete; no real benchmark has been run.** The
-  owner's next action is still the runbook pilot in `docs/BENCH_RUNBOOK.md` §2,
-  then the first dev run. Do not start a full benchmark unasked.
+- **Phase 8b preparation is complete; no clean final benchmark has been run.**
+  A local 2026-10-26 dev file exists but is dirty and mislabeled (see the bullet
+  above), so it is not evidence. The owner's next actions are a clean dev run
+  and then the holdout decision; do not start a full benchmark unasked. The
+  operator contract is `docs/BENCH_RUNBOOK.md` §2.
 - **Phase 8b prep deliverables**: `bench/preflight.py` (`dqs bench preflight`,
   read-only PASS/FAIL); `bench/ledger.py` (per-UTC-day token ledger at
   `data/token_ledger.json`); `bench/harness.py` (`code_fingerprint`,
@@ -499,8 +501,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   plan-fix path, the Phase-6a publish package, the Phase-6b workflow/demo, the
   Phase-8a benchmark backend, the Phase-8b preparation (preflight, ledger,
   fingerprint, infra handling, repeats, Wilson report) and the Phase-7
-  Streamlit console all work and are tested. **No real benchmark run has been
-  performed** (Phase 8b run is the owner's next decision).
+  Streamlit console all work and are tested. **No clean final benchmark run has
+  been performed** (a dirty dev run exists; see Current state).
 - The Streamlit console has no authentication and is intended to run locally;
   anyone who can reach the port can approve an incident. Approval requires the
   SQLite checkpoint written by `dqs incident run`/`dqs demo`; a missing or
