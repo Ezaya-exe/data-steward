@@ -1,11 +1,26 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-25 (Phase 7 Streamlit UI complete; real benchmark not run)
+Last updated: 2026-10-27 (Phase 10 polish complete; no final benchmark)
 · Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **Phase 10 (polish) is complete.** `README.md` now has the problem statement,
+  a Mermaid architecture diagram, an eight-command quickstart (executed on a
+  clean clone), the design principle, Limitations, a Benchmark section whose
+  numbers are all `TBD`, and screenshot placeholders. `docs/CLAIMS.md` maps each
+  resume-safe claim to evidence and a reproduce command. `.github/workflows/ci.yml`
+  runs lint + mypy + unit tests only (no services, no secrets). `dqs bench
+  preflight` now prints the code fingerprint. Three unreferenced helpers were
+  deleted (two more were restored because they sit in fingerprint inputs; see
+  DECISIONS 143). DECISIONS 140–144. No benchmark, demo, LLM or GitHub call was made.
+- **A local dev results file exists but is not final.** The git-ignored
+  `benchmarks/results/20261026T181316Z_deepseek-deepseek-v4.1-flash.json` has 43
+  scored dev scenarios but `git_dirty=true`, and its metadata says
+  `catalogue_size=4` while the report table has n=43. It is deliberately not
+  quoted in README/CLAIMS. A clean final run (and a look at the catalogue-size
+  label bug) is still needed; do not hand-edit results.
 - **Phase 7 (Streamlit review console) is complete.** `streamlit run ui/app.py`
   serves Incidents, Incident detail, Contracts and Benchmark pages against
   `dqs_demo` (default) or the warehouse. It is read-only except approve/reject,
@@ -119,16 +134,15 @@ docs/ARCHITECTURE.md is design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **659 unit** passing on 2026-10-23 (1 skipped: real OS symlink
-  creation on Windows), plus the **7-test Phase-8a/8b benchmark integration
-  module** (template identity/checksums, clone, reuse/rebuild, warehouse guard,
-  three fake-LLM scenarios, forced dry-run with a live `GITHUB_MODE` and a
-  recording GitHub client) re-run green. ruff check/format and `mypy src` are
-  clean (101 source files, 199 files formatted). The 105 deselected integration
-  tests include the real-LLM suites (`RUN_LLM_TESTS=1`); run `dqs dev test-int`
-  for the full set. Phase 8b prep adds unit coverage for preflight, the token
+- Tests: **705 unit** passing on 2026-10-27 (1 skipped: real OS symlink
+  creation on Windows), plus the full integration suite **100 passed, 6 skipped**
+  (the LLM-gated suites need `RUN_LLM_TESTS=1`). ruff check/format and `mypy src`
+  are clean (102 source files, 210 files formatted). Run `dqs dev test-int` for
+  the integration set. Phase 8b prep adds unit coverage for preflight, the token
   ledger, Wilson intervals, infra exclusion, circuit breaker/resume, repeats,
-  fingerprint acknowledgement and the report's stability/infra sections.
+  fingerprint acknowledgement and the report's stability/infra sections. The
+  same commands also passed in a clean clone with freshly resolved dependencies
+  on 2026-10-27.
 - Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
   0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
@@ -337,10 +351,12 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 
 | File | What it does |
 |---|---|
+| `README.md` | Problem, Mermaid architecture, eight-command quickstart, design principle, limitations, TBD benchmark table, screenshot placeholders |
+| `docs/CLAIMS.md` | Resume-safe claims, each with evidence and a reproduce command; benchmark claims marked PENDING |
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (127 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (144 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; bulk `COPY` per table in one atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
@@ -574,3 +590,19 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   wide.
 - Windows console shows mojibake for some rich Unicode glyphs — cosmetic only.
 - No git remote; push instructions live with the owner.
+- **CI is defined but not yet executed on GitHub** (`.github/workflows/ci.yml`).
+  The same lint/mypy/unit commands pass locally and in a clean clone; integration
+  and real-LLM suites are deliberately local-only.
+- **README benchmark metrics are `TBD` by design.** No clean final results file
+  exists. Fill them only from `benchmarks/results/<file>`; a pilot, fake-LLM
+  wiring test or dirty-worktree run is not evidence (AGENTS §7.9).
+- The 2026-10-26 dev results file has `git_dirty=true` and a `catalogue_size=4`
+  metadata label that disagrees with its 43 scored scenarios. It is git-ignored
+  and not quoted; the label logic has not been fixed yet.
+- The clean-clone quickstart resolves `pyproject.toml` ranges, not
+  `requirements.lock`. On 2026-10-27 it installed slightly newer versions
+  (e.g. ruff 0.17.3 vs locked 0.17.1, streamlit 1.66.1 vs 1.66.0) and still
+  passed lint and the unit suite. Use the lock for a byte-reproducible
+  environment if needed.
+- The README screenshots do not exist yet; `docs/img/README.md` is the capture
+  checklist, and README marks each path `TBD`.

@@ -933,3 +933,49 @@ entry each; newest last.
      DeepSeek models keep the generic fallback. `config.py` and the unit test
      are outside the code-fingerprint inputs, so the frozen fingerprint stays
      `17ac403b...`; no benchmark, demo, LLM or GitHub call was made.
+
+---
+
+## Phase 10 - polish and honest claims (2026-10-27)
+
+140. **`dqs bench preflight` prints the code fingerprint.** The harness check now
+     shows `fp=<first 12 hex>` next to the harness version and prompt hashes, so
+     "unchanged since the last run" is visible without a second command. The
+     fingerprint itself is unchanged; `bench/preflight.py` is not one of its
+     inputs. The existing unit test asserts the new field.
+141. **The README quickstart is eight PowerShell commands, including clone and
+     `cd`.** PHASES §Phase 10 says "≤6"; this supersedes it for clarity. The six
+     steps that actually install/run are venv, editable install, `.env`, compose
+     up, `db init`, and `sim seed`; clone and `cd` are separate lines so the
+     block can be pasted literally. No LLM key is needed. The block was executed
+     end-to-end on a clean clone (commit `49c8309`) in a temporary directory on
+     2026-10-27: all eight exited 0, `db ping` showed PostgreSQL 16.15 for both
+     roles, and the seed left 30 batches (max date 2026-01-30). `dqs dev lint`
+     and the unit suite also passed in that fresh environment.
+142. **CI is lint + mypy + unit tests only, with no services and no secrets.**
+     Integration tests need Docker Postgres, dbt and a seeded template; real-LLM
+     tests need a key. Both stay local (`dqs dev test-int`). `.github/workflows/ci.yml`
+     runs on Ubuntu + Python 3.12, installs `.[dev]`, and invokes the same
+     commands as `dqs dev lint`/`dqs dev test`. The workflow has not been
+     executed on GitHub (this checkout has no remote); the commands pass
+     locally and in the clean clone.
+143. **Three unreferenced helpers were deleted; two were left in place.** No
+     references existed anywhere in `src/`, `tests/`, `ui/`, `scripts/` or docs
+     for `dbt_run.last_runs`, `bench.runner.ScenarioFailure` and
+     `tools.registry.registry_names`; the first two were removed. `registry_names`
+     and the two unused helpers in `verify/patch.py` (`validate_plan`,
+     `ignored_at_top_level`) live in packages that feed the benchmark code
+     fingerprint, so removing them changed `code_fingerprint()` from
+     `17ac403b...` to `e33eed5c...`. They were restored: a dead-code cleanup
+     must not silently invalidate prior benchmark provenance. No behaviour or
+     test changed by the three removals that stayed.
+144. **The 2026-10-26 dev results file is not quoted as benchmark evidence.**
+     The local file `benchmarks/results/20261026T181316Z_deepseek-deepseek-v4.1-flash.json`
+     has `git_dirty=true` and an internally inconsistent label: metadata says
+     `catalogue_size=4`, while the file contains 43 scored scenarios and the
+     report prints "catalogue: 4 scenarios" above an n=43 table. A dirty tree
+     cannot be reproduced byte-for-byte, and the label bug makes the file
+     unsuitable for a headline. README and CLAIMS therefore keep every
+     benchmark metric as `TBD`/PENDING until a clean final file is produced.
+     The file is left untouched (results are git-ignored) and the mismatch is
+     recorded in HANDOFF.md for the owner.
