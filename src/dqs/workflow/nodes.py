@@ -171,8 +171,8 @@ def investigate_node(deps: WorkflowDeps) -> Callable[[WorkflowState], dict[str, 
         if result.budget_exceeded:
             errors = _add_error(
                 errors,
-                "investigation budget exhausted; the diagnosis is partial (UNKNOWN unless the "
-                "model had already submitted a root cause)",
+                "investigation budget exhausted; the RootCause was answered from the evidence "
+                "already gathered, or escalated to UNKNOWN when that final answer failed",
             )
         started_at = state.get("budget", WorkflowBudget(started_at=_now())).started_at
         return {

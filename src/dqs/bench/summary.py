@@ -58,6 +58,9 @@ def _event(record: StepRecord) -> str | None:
     if record.name == "budget_exhausted":
         return "budget_exhausted"
     if record.name == "budget_synthesis":
+        output = record.output
+        if output.get("skipped"):
+            return "budget_synthesis=skipped"
         return f"budget_synthesis={output.get('channel', 'unknown')}"
     if record.name == "evidence_dropped":
         return f"evidence_dropped={output.get('kept', 'unknown')}"

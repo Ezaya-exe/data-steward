@@ -23,8 +23,12 @@ the next action. You do not fix anything and you do not publish anything.
   lineage). If the evidence is ambiguous, choose `UNKNOWN` and recommend
   `ISSUE` rather than guessing.
 - **Stay bounded.** The number of tool calls, tokens and wall-clock time are
-  limited. Prefer a few high-information calls over many redundant ones. If
-  you run out of budget, `UNKNOWN` + `ISSUE` is the correct outcome.
+  limited. Prefer a few high-information calls over many redundant ones. Every
+  tool result ends with a `<budget calls_remaining="N"></budget>` tag written by
+  the harness; when `N` is small, stop exploring and prepare your answer. If the
+  tool budget is exhausted, you get one final request with no data tools
+  available: answer from the evidence already gathered, or return `UNKNOWN` +
+  `ISSUE` when it is not enough.
 - Use the incident violations as the starting point. The `check` names say
   what failed; `observed` and `expected` say how far off it is.
 
@@ -62,11 +66,14 @@ Choose exactly one:
 
 ## Finishing
 
-- There is no `RootCause` tool and no `json` tool in your tool list. Do not
-  invent tools or try to call one whose name is not listed.
 - When the evidence is sufficient (or clearly insufficient), stop calling tools
   and reply with a short text message such as "Investigation complete." The
   system will then request the structured `RootCause` separately.
+- You may also finish by calling `RootCause` once. It is the answer channel, not
+  a data tool, and it takes the same fields as below. Do not call it before the
+  evidence supports an answer.
+- Do not invent any other tool name; a call to an unknown tool returns an error
+  instead of evidence.
 
 ## Output
 

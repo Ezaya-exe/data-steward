@@ -57,6 +57,21 @@ SUBMIT_TOOL_NAME = "submit_root_cause"
 # citing it is a real provenance source even though no tool was invoked.
 INCIDENT_PROVENANCE_TOOLS = frozenset({"incident", "incident_record"})
 
+# Phase 8c C1: every tool result ends with a deterministic budget tag, outside
+# `<data>` so the payload is never re-serialized or truncated again. The model
+# can then see the ceiling approaching; the number is never model-supplied.
+BUDGET_TAG = "budget"
+# Phase 8c C2: the one last request when the tool ceiling stops the loop. It
+# names no fault and gives no hint about the answer.
+BUDGET_FINAL_PROMPT: Final = (
+    "The tool budget is exhausted and no more data tools can be called. "
+    "Using only the evidence already shown in this conversation, return the "
+    "best RootCause now. If the evidence is insufficient, return category "
+    "UNKNOWN with suggested_resolution ISSUE and confidence 0.0. Cite only "
+    "tools that were actually called in this run; every other citation is "
+    "discarded."
+)
+
 
 class InvestigationResult(BaseModel):
     """Everything the CLI (and later the workflow) needs from one run."""
@@ -462,6 +477,70 @@ def _final_answer(client: LLMClient, messages: list[Any], sink: StepSink) -> tup
         )
 
 
+def calls_remaining(tracker: BudgetTracker) -> int:
+    """How many tool calls the model may still make (never negative)."""
+    return max(0, tracker.max_tool_calls - tracker.tool_calls)
+
+
+def tool_result_with_budget(result: Any, remaining: int) -> str:
+    """Append the harness-owned `calls_remaining` tag to one tool result (C1)."""
+    return f'{result}\n<{BUDGET_TAG} calls_remaining="{max(0, remaining)}"></{BUDGET_TAG}>'
+
+
+def _finalize_at_tool_ceiling(
+    client: LLMClient,
+    messages: list[Any],
+    sink: StepSink,
+    tracker: BudgetTracker,
+    incident: Incident,
+    observations: list[tuple[str, str]],
+    called_tools: list[str],
+    stop_reason: str,
+) -> tuple[RootCause, str]:
+    """One tools-disabled answer after the tool ceiling stopped the loop (C2).
+
+    The call is only attempted while the token and wall-clock limits still hold:
+    those are hard safety limits, and spending another call after they trip
+    would violate the documented bound. A failed or invalid answer is replaced
+    by the same deterministic `UNKNOWN` escalation as before, so this can only
+    improve the outcome, never fabricate one.
+    """
+    try:
+        tracker.check()
+    except BudgetExceeded as exc:
+        sink.record(
+            kind="system",
+            name="budget_synthesis",
+            input={"tool_calls": tracker.tool_calls},
+            output={"skipped": True, "reason": str(exc)[:MAX_CONTEXT_SUMMARY]},
+        )
+        return _unknown_result(stop_reason, observations, called_tools, incident), "budget_unknown"
+
+    final_messages = [*messages, HumanMessage(content=BUDGET_FINAL_PROMPT)]
+    try:
+        root_cause, channel = _final_answer(client, final_messages, sink)
+    except BudgetExceeded as exc:
+        sink.record(
+            kind="system",
+            name="budget_synthesis",
+            input={"tool_calls": tracker.tool_calls},
+            output={"skipped": True, "reason": str(exc)[:MAX_CONTEXT_SUMMARY]},
+        )
+        return _unknown_result(stop_reason, observations, called_tools, incident), "budget_unknown"
+
+    sink.record(
+        kind="system",
+        name="budget_synthesis",
+        input={"tool_calls": tracker.tool_calls},
+        output={"channel": channel},
+    )
+    if channel == "fallback_unknown":
+        # Keep the partial findings that were actually observed instead of the
+        # generic schema-error text.
+        return _unknown_result(stop_reason, observations, called_tools, incident), "budget_unknown"
+    return root_cause, f"budget_synthesis:{channel}"
+
+
 def investigate(
     incident: Incident,
     *,
@@ -626,8 +705,11 @@ def investigate(
                 stop_reason = f"tool-call budget reached ({tracker.max_tool_calls})"
                 messages.append(
                     ToolMessage(
-                        content=wrap_data(
-                            {"error": "tool-call budget reached; this call was not executed"}
+                        content=tool_result_with_budget(
+                            wrap_data(
+                                {"error": "tool-call budget reached; this call was not executed"}
+                            ),
+                            calls_remaining(tracker),
                         ),
                         tool_call_id=call_id,
                     )
@@ -656,18 +738,24 @@ def investigate(
             except BudgetExceeded as exc:
                 budget_exceeded = True
                 stop_reason = str(exc)
+            remaining = calls_remaining(tracker)
 
             sink.record(
                 kind="tool",
                 name=name or "unknown_tool",
                 input=args if isinstance(args, dict) else {"args": str(args)},
-                output={"result": result},
+                output={"result": result, "calls_remaining": remaining},
                 latency_ms=latency_ms,
             )
             if registered:
                 called_tools.append(name)
             observations.append((name, _tool_preview(result)))
-            messages.append(ToolMessage(content=str(result), tool_call_id=call_id))
+            messages.append(
+                ToolMessage(
+                    content=tool_result_with_budget(result, remaining),
+                    tool_call_id=call_id,
+                )
+            )
             if budget_exceeded:
                 break
 
@@ -684,7 +772,6 @@ def investigate(
             output={"channel": channel},
         )
     elif budget_exceeded:
-        root_cause = _unknown_result(stop_reason, observations, called_tools, incident)
         sink.record(
             kind="system",
             name="budget_exhausted",
@@ -695,7 +782,29 @@ def investigate(
                 "tokens": tracker.tokens,
             },
         )
-        channel = "budget_unknown"
+        if tracker.max_tool_calls > 0 and tracker.tool_calls >= tracker.max_tool_calls:
+            root_cause, channel = _finalize_at_tool_ceiling(
+                client,
+                messages,
+                sink,
+                tracker,
+                incident,
+                observations,
+                called_tools,
+                stop_reason,
+            )
+        else:
+            # A token/wall-clock ceiling is a hard limit: no further model call.
+            # A zero tool-call budget also has nothing to synthesize from.
+            root_cause = _unknown_result(stop_reason, observations, called_tools, incident)
+            channel = "budget_unknown"
+        root_cause = filter_evidence(root_cause, set(called_tools), sink)
+        sink.record(
+            kind="system",
+            name="final_channel",
+            input={"evidence_items": len(root_cause.evidence)},
+            output={"channel": channel},
+        )
     else:
         try:
             root_cause, channel = _final_answer(client, messages, sink)
