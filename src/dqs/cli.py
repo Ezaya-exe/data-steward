@@ -46,6 +46,7 @@ from dqs.agents.steps import DbStepSink
 from dqs.bench.ledger import DEFAULT_LEDGER_PATH
 from dqs.bench.preflight import run_preflight
 from dqs.bench.report import load_run_file, render_markdown
+from dqs.bench.rescore import default_destination, rescore_file
 from dqs.bench.runner import RESULTS_DIR, BenchOptions, run_benchmark
 from dqs.checks.engine import CheckEngine
 from dqs.config import Settings, load_settings
@@ -1321,6 +1322,11 @@ def bench_run(
         "--acknowledge-changes",
         help="Reason for running holdout/all after the code fingerprint changed.",
     ),
+    diagnostic: bool = typer.Option(
+        False,
+        "--diagnostic",
+        help="Mark this selection as diagnostic-only; never benchmark evidence.",
+    ),
     token_ledger: Annotated[
         Path | None, typer.Option("--token-ledger", help="Daily token ledger JSON path.")
     ] = None,
@@ -1342,6 +1348,7 @@ def bench_run(
         llm_retry_max_wait_seconds=llm_retry_max_wait,
         repeats=repeats,
         acknowledge_changes=acknowledge_changes,
+        diagnostic=diagnostic,
         ledger_path=(token_ledger or DEFAULT_LEDGER_PATH),
         results_dir=(results_dir or RESULTS_DIR),
     )
@@ -1394,6 +1401,26 @@ def bench_report(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         _fail(DqsError(f"could not read results file {target}: {exc}"))
     typer.echo(render_markdown(run))
+
+
+@bench_app.command("rescore")
+def bench_rescore(
+    file: Annotated[Path, typer.Argument(help="Existing results JSON to rescore.")],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="New output file; defaults to <name>_rescore.json."),
+    ] = None,
+    show: bool = typer.Option(True, "--show/--no-show", help="Print the rescored report."),
+) -> None:
+    """Recompute scores from stored records into a NEW file (never overwrites)."""
+    destination = out or default_destination(file)
+    try:
+        run = rescore_file(file, destination)
+    except DqsError as exc:
+        _fail(exc)
+    console.print(f"[green]ok[/green] rescored {file} -> {destination}")
+    if show:
+        typer.echo(render_markdown(run))
 
 
 def _latest_results_file() -> Path:

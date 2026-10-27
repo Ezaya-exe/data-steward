@@ -56,6 +56,7 @@ from dqs.bench.scenarios import (
     scenarios_for,
 )
 from dqs.bench.scoring import Observation, ScenarioRun, score_scenario
+from dqs.bench.summary import StepSummary, load_fix_history, load_step_records, summarize_steps
 from dqs.config import Settings, estimate_cost_usd, price_for_model
 from dqs.contracts import store as contracts_store
 from dqs.errors import DailyQuotaExceeded, DqsError
@@ -112,6 +113,8 @@ class BenchOptions(BaseModel):
     llm_retry_max_wait_seconds: float = 90.0
     repeats: int = 1
     acknowledge_changes: str | None = None
+    # A diagnostic run is deliberately kept separate from benchmark evidence.
+    diagnostic: bool = False
     ledger_path: Path = DEFAULT_LEDGER_PATH
     results_dir: Path = RESULTS_DIR
 
@@ -282,6 +285,24 @@ def _probe_incident_id(engine: Engine) -> uuid.UUID:
     return found[0].incident_id
 
 
+def _safe_step_summary(
+    engine: Engine,
+    incident_id: uuid.UUID,
+    fix_attempts: int,
+    failed_criteria: list[str],
+) -> StepSummary | None:
+    """Read the step log for the result record; reporting must never fail a run."""
+    try:
+        return summarize_steps(
+            load_step_records(engine, incident_id),
+            fix_attempts=fix_attempts,
+            failed_criteria=failed_criteria,
+        )
+    except Exception as exc:  # a diagnostic read is not worth losing the score
+        logger.warning("could not summarise agent steps for %s: %s", incident_id, exc)
+        return None
+
+
 def execute_scenario(
     settings: Settings,
     options: BenchOptions,
@@ -358,6 +379,17 @@ def execute_scenario(
                 else:
                     observation.error = outcome.error
             observation.root_cause = _root_cause_from_incident(engine, incident.incident_id)
+            try:
+                fix_attempts, failed_criteria = load_fix_history(engine, incident.incident_id)
+            except Exception as exc:
+                logger.warning("could not read fix history for %s: %s", incident.incident_id, exc)
+                fix_attempts, failed_criteria = 0, []
+            observation.fix_attempts = fix_attempts
+            observation.fix_attempted = fix_attempts > 0
+            observation.failed_criteria = failed_criteria
+            observation.step_summary = _safe_step_summary(
+                engine, incident.incident_id, fix_attempts, failed_criteria
+            )
             attempt = load_latest_fix_attempt(engine, incident.incident_id)
             observation.verification_passed = None if attempt is None else attempt[1].passed
             if (
@@ -545,6 +577,12 @@ def _new_run_file(
         holdout_confirmed=options.confirm_holdout,
         prompt_changed_since_last_dev=prompt_changed,
         previous_dev_run=previous_run,
+        diagnostic=options.diagnostic,
+        diagnostic_note=(
+            "diagnostic selection; not a representative benchmark run"
+            if options.diagnostic
+            else None
+        ),
         catalogue_size=len(selected),
         fault_count=sum(1 for scenario in selected if not scenario.is_control),
         control_count=sum(1 for scenario in selected if scenario.is_control),
