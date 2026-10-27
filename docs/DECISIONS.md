@@ -1028,3 +1028,32 @@ entry each; newest last.
      the injectors. The code fingerprint also changes because
      `bench/scoring.py` is one of its inputs; the version bump documents the
      intentional change.
+152. **Every tool result carries a harness-owned `calls_remaining` tag (C1).**
+     The tag is appended *after* the `<data>…</data>` envelope, so the payload
+     is never re-serialized or truncated a second time, and the number is
+     computed from `BudgetTracker`, never model-supplied. The step log stores
+     the same number next to the tool output, so the timeline shows what the
+     model could see. The existing 4 KB data cap is unchanged.
+153. **One tools-disabled final answer at the tool ceiling (C2).** When the loop
+     stops because the *tool-call* budget is reached, the model gets exactly one
+     more call with no data tools, a generic instruction to answer from evidence
+     already gathered, and the same `RootCause` schema, native-structured-output
+     → submit-tool fallback, provenance filter and confidence validation. A
+     token or wall-clock ceiling is a hard limit, so those stops (and a zero
+     tool-call budget) do not spend another model call. If synthesis fails,
+     raises or returns invalid output, the deterministic `UNKNOWN` + `ISSUE`
+     escalation is byte-for-byte the old fallback with the partial findings.
+     The diagnostic run showed the missing final turn, not missing evidence, is
+     what caps these incidents (`docs/review/budget-cap-diagnosis.md`).
+154. **The investigator prompt now describes the real finishing channels.** It
+     states the `<budget calls_remaining="N">` rule and the one final
+     tools-disabled request, and it no longer claims that no `RootCause` tool
+     exists (that claim had been false since Phase 8a). The wording is generic:
+     no fault name, check name, scenario id or answer hint. This changes the
+     prompt hash and therefore the code fingerprint; the next benchmark file
+     will record the new hash.
+155. **Budget-exhaustion wording in the workflow matches the new path.** The
+     `errors` entry no longer says the diagnosis is always partial/UNKNOWN; it
+     says the answer came from the evidence already gathered or was escalated to
+     UNKNOWN when that final answer failed. The `budget_exceeded` flag itself is
+     unchanged, so verification routing keeps its existing meaning.

@@ -1,11 +1,42 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-27 (Phase 10 polish complete; no final benchmark)
+Last updated: 2026-10-27 (Phase 8c scoring, cap diagnosis and investigator fix; no final benchmark)
 · Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **Phase 8c work is implemented, verified and ready for owner review (scoring
+  corrections, cap diagnosis, investigator fix).** Report:
+  `docs/phase-notes/phase-8c.md`. Detection now matches
+  batch-level checks (`freshness.sla`, `monitor.missing_batch`) by check name;
+  fix metrics have explicit
+  PR-expected / attempted / verified scopes and never coerce "not attempted"
+  into a failure; each result record stores a compact step summary and fix
+  history; `dqs bench rescore` writes a new derived file (it refuses to
+  overwrite). The rescored dev-run-1 file reports detection 33/37, RC category
+  21/37, columns 27/27, resolution 31/37, fixes delivered 7/13, verifier pass
+  given attempt 7/7, semantic given verified 7/7, verified-but-wrong 0/7, FP
+  0/6. Detection is still 33/37 because the incident list was never stored;
+  A1 cannot be replayed offline (DECISIONS 148).
+- **The budget cap was diagnosed with a four-scenario `--ids` run**
+  (`docs/review/budget-cap-diagnosis.md`; diagnostic file
+  `20261027T125219Z_...`, harness `8c.1`). All four stopped at exactly 10 tool
+  calls with the decisive fact already observed and **no finish attempt**; at
+  least 6/40 calls were guard/SQL errors. The cause is a finalization gap, not
+  missing evidence.
+- **The investigator fix is implemented and confirmed once on a real model.**
+  Every tool result carries a harness-owned `calls_remaining` tag; a loop
+  stopped by the tool-call ceiling gets one tools-disabled `RootCause` request
+  before the UNKNOWN fallback, with the same schema/provenance/confidence rules
+  (DECISIONS 152–155). A one-scenario diagnostic (`20261027T131407Z_...`)
+  returned `REFERENTIAL_INTEGRITY_BROKEN`, confidence 0.65, ISSUE on the same
+  orphan-keys case that previously returned UNKNOWN. n=1: a wiring
+  confirmation, not benchmark evidence.
+- **No clean final benchmark exists.** The 2026-10-26 dev file is dirty and
+  mislabeled; the two 2026-10-27 files are explicitly diagnostic. README and
+  CLAIMS keep benchmark metrics `TBD`/PENDING. Do not quote any of these files
+  as a benchmark result.
 - **Phase 10 (polish) is complete.** `README.md` now has the problem statement,
   a Mermaid architecture diagram, an eight-command quickstart (executed on a
   clean clone), the design principle, Limitations, a Benchmark section whose
@@ -19,8 +50,10 @@ docs/ARCHITECTURE.md is design.
   `benchmarks/results/20261026T181316Z_deepseek-deepseek-v4.1-flash.json` has 43
   scored dev scenarios but `git_dirty=true`, and its metadata says
   `catalogue_size=4` while the report table has n=43. It is deliberately not
-  quoted in README/CLAIMS. A clean final run (and a look at the catalogue-size
-  label bug) is still needed; do not hand-edit results.
+  quoted in README/CLAIMS. Its rescored sibling
+  (`..._rescore.json`, derived, diagnostic) applies the corrected metrics but
+  cannot recover detection. The catalogue-size label bug itself is **not**
+  fixed; diagnose it against a clean run rather than hand-editing results.
 - **Phase 7 (Streamlit review console) is complete.** `streamlit run ui/app.py`
   serves Incidents, Incident detail, Contracts and Benchmark pages against
   `dqs_demo` (default) or the warehouse. It is read-only except approve/reject,
@@ -136,13 +169,17 @@ docs/ARCHITECTURE.md is design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **705 unit** passing on 2026-10-27 (1 skipped: real OS symlink
+- Tests: **722 unit** passing on 2026-10-27 (1 skipped: real OS symlink
   creation on Windows), plus the full integration suite **100 passed, 6 skipped**
   (the LLM-gated suites need `RUN_LLM_TESTS=1`). ruff check/format and `mypy src`
-  are clean (102 source files, 210 files formatted). Run `dqs dev test-int` for
+  are clean (104 source files, 219 files formatted). Run `dqs dev test-int` for
   the integration set. Phase 8b prep adds unit coverage for preflight, the token
   ledger, Wilson intervals, infra exclusion, circuit breaker/resume, repeats,
-  fingerprint acknowledgement and the report's stability/infra sections. The
+  fingerprint acknowledgement and the report's stability/infra sections. Phase
+  8c adds unit coverage for batch-level detection, the three fix scopes,
+  step summaries, rescore refusal/legacy policy, `calls_remaining`, budget
+  synthesis, invalid-output fallback, provenance filtering and the 0.6 PR
+  boundary. The
   same commands also passed in a clean clone with freshly resolved dependencies
   on 2026-10-27.
 - Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
@@ -290,6 +327,11 @@ $env:RUN_LLM_TESTS='1'
 .venv\Scripts\dqs bench run --split dev --resume benchmarks\results\<file>.json
 # holdout requires --confirm-holdout and must not guide prompt tuning.
 
+# Phase 8c: correct stored scores without a new model run; always a NEW file
+.venv\Scripts\dqs bench rescore benchmarks\results\<file>.json
+# diagnostic subsets are labelled in the file/report and are never evidence
+.venv\Scripts\dqs bench run --split dev --ids <ids> --diagnostic
+
 # Phase 7 flow — Streamlit review console. Read-only except approve/reject;
 # the UI never calls an LLM or GitHub by itself. Start it while Postgres is up.
 .venv\Scripts\python -m streamlit run ui/app.py
@@ -358,7 +400,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (144 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (155 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; bulk `COPY` per table in one atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
@@ -377,7 +419,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/agents/llm.py` | the ONLY provider construction; per-call tokens/latency; budgets; retries; daily-quota guard; fake model (Phase 4a/b, 8a) |
 | `src/dqs/tools/sql_guard.py` | deny-by-default SQL guard + positive function allowlist + read-only executor (Phase 4a/b) |
 | `src/dqs/tools/registry.py` | the nine typed tools the investigator sees (Phase 4a) |
-| `src/dqs/agents/investigator.py` | explicit bounded tool loop; final channels; `RootCause` finish tool + `failed_generation` salvage; provenance (Phase 4b/8a) |
+| `src/dqs/agents/investigator.py` | explicit bounded tool loop; final channels; `RootCause` finish tool + `failed_generation` salvage; provenance; `calls_remaining` tag and tools-disabled synthesis at the ceiling (Phase 4b/8a/8c) |
 | `src/dqs/verify/patch.py` | hardened edit allowlist, exact-match application, relevance rule, temp-project copy (Phase 5a) |
 | `src/dqs/verify/sandbox.py` | isolated dbt build, minimal env, timeout, cleanup, `dq.fix_attempts` persistence (Phase 5a) |
 | `src/dqs/verify/criteria.py` | contract conformance, row preservation, category targeted checks (Phase 5a) |
@@ -394,6 +436,8 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `src/dqs/workflow/runner.py` | `SqliteSaver`, `thread_id=incident_id`, `run`/`resume`, redacted failures (Phase 6b) |
 | `src/dqs/demo.py` | isolated `dqs_demo` story: clone template, fault, monitor, workflow, approval, previews (Phase 6b/8a) |
 | `src/dqs/bench/{scenarios,scoring,oracle,runner,report,harness}.py` | 53+6 catalogue, answer-key oracle, deterministic scorer, quota-aware runner, results model/`latest.md`, frozen prompt hashes (Phase 8a) |
+| `src/dqs/bench/{summary,rescore}.py` | compact step summary stored per result, and offline rescore into a new derived file (Phase 8c) |
+| `docs/review/budget-cap-diagnosis.md` | the four-scenario cap diagnosis and the one-scenario confirmation after the fix (Phase 8c) |
 | `tests/integration/test_bench_fast_reset.py` | real template build, checksums, clone identity, warehouse guard, 3 fake-LLM e2e scenarios (Phase 8a) |
 | `src/dqs/agents/steps.py` | `dq.agent_steps` sinks: sink-owned seq, redaction, 4 KB cap (Phase 4b) |
 | `src/dqs/agents/prompts/investigator.md` | investigator system prompt (Phase 4b) |
@@ -403,7 +447,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 `src/dqs/contracts/{store,generator,profiler,fitting,parsing,generation}.py`,
 `src/dqs/models/{contract,violation,incident,enums}.py`, `tests/conftest.py`,
 `tests/unit/test_*.py`, `tests/integration/test_*.py`, dbt `models/*.sql`,
-`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b,5a,5b,6a,6b,8a}.md`,
+`contracts/*.yml`, `docs/phase-notes/phase-{0,1,2a,2b,3,4a,4b,5a,5b,6a,6b,8a,8c}.md`,
 `docs/review/phase-{2b,3,4a,4b,5a,5b,6a,6b,8a}-review.md`.)
 
 ## DECISIONS.md entries Phase 2 must build on
@@ -578,7 +622,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   200K/day cap - a planning estimate, not a measurement. The template content
   hash covers generator + contracts + dbt content, not `sim/loader.py`; a hard
   kill can leave one `dqs_bench_*` DB (the next run drops it). Daily-quota
-  detection is provider-text based; prompts are frozen at harness `8b.1`.
+  detection is provider-text based; prompts are frozen at harness `8c.1`.
 - A benchmark results file is one model/provider per file (`--resume` refuses a
   mismatch). Holdout requires `--confirm-holdout` and must not guide prompt
   tuning (AGENTS §7.9). A holdout/all run also requires
@@ -601,6 +645,21 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - The 2026-10-26 dev results file has `git_dirty=true` and a `catalogue_size=4`
   metadata label that disagrees with its 43 scored scenarios. It is git-ignored
   and not quoted; the label logic has not been fixed yet.
+- **Rescore is not a remeasurement.** `dqs bench rescore` can only recompute
+  fields stored in the file. Detection is preserved, because the incident list
+  and violation rows were never persisted; the rescored dev-run-1 file therefore
+  still shows 33/37 even though the A1 rule would catch the four late-batch
+  cases. A legacy `verifier_passed=False` stays `fix_attempted=None` and is left
+  out of the attempt-conditioned denominator, not counted as a failed attempt.
+- **The two 2026-10-27 files are diagnostic, not evidence.** The four-scenario
+  cap diagnosis and the one-scenario synthesis confirmation both carry
+  `diagnostic=true`; neither is quoted in README/CLAIMS. The synthesis check is
+  n=1 and says nothing about how often the final call succeeds or whether
+  confidence is calibrated. The tool ceiling itself is unchanged (the confirmed
+  run still spent all ten calls).
+- The investigator's final synthesis is skipped when the stop reason is a token
+  or wall-clock ceiling (those are hard safety limits) and when
+  `MAX_TOOL_CALLS=0`. In those cases the old deterministic UNKNOWN path is used.
 - The clean-clone quickstart resolves `pyproject.toml` ranges, not
   `requirements.lock`. On 2026-10-27 it installed slightly newer versions
   (e.g. ruff 0.17.3 vs locked 0.17.1, streamlit 1.66.1 vs 1.66.0) and still
