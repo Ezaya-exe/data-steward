@@ -180,6 +180,31 @@ It does *not* support raising `MAX_TOOL_CALLS`, adding tools, or tuning prompts
 towards the four fault names: raising the ceiling pays for more of the same
 wasted calls, and the evidence was already sufficient.
 
+## After the fix: one-scenario confirmation
+
+The conditional fix was implemented and checked on the *same* orphan-keys
+scenario with the same model, limits and diagnostic flag. This is a wiring
+confirmation, not a benchmark result (n=1, one repeat).
+
+- Results: `benchmarks/results/20261027T131407Z_deepseek-deepseek-v4.1-flash.json`
+  (diagnostic, harness `8c.1`, code fingerprint `9104f1938c16`)
+- Tool sequence: the same 10-call ceiling was reached
+  (`get_contract, get_batch_profile, get_pipeline_run, get_lineage,
+  get_batch_profile, sample_rows, get_contract, run_readonly_sql ×3`)
+- Events: `budget_exhausted`, then `budget_synthesis=native_structured`,
+  then `final_channel=budget_synthesis:native_structured`
+- Answer: `REFERENTIAL_INTEGRITY_BROKEN` on `raw.orders.customer_id`,
+  confidence **0.65**, `ISSUE` (the expected resolution and category; the
+  scorer reports `rc_category=1.0`)
+- Seven evidence items, every citation a tool that was actually called; the
+  answer explicitly records that `sample_rows` returned no violating rows.
+
+The ceiling itself is unchanged: the run still spent all ten calls (30,955
+tokens versus 20,845 before). The fix does not make the model cheaper; it stops
+the ceiling from throwing away a diagnosis that is already supported. One
+scenario cannot show how often the synthesis call succeeds or whether its
+confidence is calibrated; that needs the next clean benchmark run.
+
 ## Limits of this diagnosis
 
 - One repeat per scenario, one model, one day. Scenario-level variance is not
