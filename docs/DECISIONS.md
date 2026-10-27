@@ -979,3 +979,52 @@ entry each; newest last.
      benchmark metric as `TBD`/PENDING until a clean final file is produced.
      The file is left untouched (results are git-ignored) and the mismatch is
      recorded in HANDOFF.md for the owner.
+
+---
+
+## Phase 8c - scoring corrections and budget-cap diagnosis (2026-10-27)
+
+145. **Batch-level checks match on the check name, not the table (A1).**
+     `freshness.sla` and `monitor.missing_batch` are emitted with `table=None`
+     because they describe a batch, not a table. Requiring the scenario table
+     made every `late_batch` scenario permanently undetectable. Detection now
+     treats those two check names as batch-scoped and matches any incident that
+     carries them; every table-level fault still requires the scenario's table.
+     The set lives in `bench/scoring.BATCH_LEVEL_CHECKS`, not in a per-fault
+     branch, so adding a fault kind cannot silently widen the rule.
+146. **Fix metrics have three explicit scopes and never coerce `None` (A2).**
+     `fix_attempted` means at least one `dq.fix_attempts` row existed;
+     `fix_delivered_valid` is measured over all PR-expected scenarios (resolution
+     PR *and* verifier passed); `verifier_pass_given_attempt` uses attempted
+     fixes as its denominator; `semantic_given_verified` and
+     `verified_but_wrong` use verified fixes. A missing verification stays
+     `None` and is excluded, never reported as a failure. The old behaviour
+     scored six dev-run-1 scenarios that never reached `plan_fix` as failed
+     verifications, which understated the verifier and semantic rates.
+147. **Legacy results are rescored conservatively.** An old record with
+     `verifier_passed is True` gets `fix_attempted=True` (a pass implies an
+     attempt). A record with `verifier_passed` `False`/`None` keeps
+     `fix_attempted=None`: an old file cannot distinguish "the attempt failed"
+     from "no attempt", and inferring "not attempted" from an `ISSUE`
+     resolution would be a guess. Those records stay out of the
+     attempt-conditioned denominator.
+148. **Rescore cannot recover detection.** The incident list was never stored in
+     a results file, so rescoring preserves each recorded `detected` value
+     instead of recomputing it. Applying A1 to dev-run-1 would change the
+     detection number, but doing so without the incidents would be fabricated
+     evidence; the limitation is written into every rescored file's
+     `rescore_note` and into the phase report.
+149. **A rescore writes a new, self-labelled file.** `dqs bench rescore` refuses
+     to overwrite the source or an existing destination, writes
+     `<stem>_rescore.json`, and sets `run_id=<original>-rescore`, `rescore_of`,
+     `rescore_at`, `rescore_note`, `diagnostic=true` and a diagnostic note. A
+     derived document must never be mistaken for a new measurement.
+150. **Diagnostic runs are first-class metadata, not a filename convention.**
+     `dqs bench run --diagnostic` sets `diagnostic=true` and a note in the
+     results file and the markdown report. Part B's four-scenario `--ids` run
+     used this flag so it cannot be quoted as a benchmark result.
+151. **`HARNESS_VERSION` is `8c.1`.** The scoring and reporting plumbing changed
+     (A1/A2/A3/A4) without changing tools, contracts, scenarios, the oracle or
+     the injectors. The code fingerprint also changes because
+     `bench/scoring.py` is one of its inputs; the version bump documents the
+     intentional change.
