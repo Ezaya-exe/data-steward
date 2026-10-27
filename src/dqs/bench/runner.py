@@ -116,14 +116,6 @@ class BenchOptions(BaseModel):
     results_dir: Path = RESULTS_DIR
 
 
-class ScenarioFailure(BaseModel):
-    """Internal marker for a non-quota per-scenario failure (never dropped)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    error: str
-
-
 Progress = Callable[[str], None]
 ClientFactory = Callable[[Settings, str, str, float], LLMClient]
 

@@ -212,19 +212,6 @@ def run_dbt_build(
     return completed.returncode, output
 
 
-def last_runs(engine: Engine, limit: int = 5) -> list[tuple[str, str, str]]:
-    """Most recent (batch_id, status, command) rows, for quick CLI summaries."""
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT batch_id, status, command FROM dq.pipeline_runs "
-                "ORDER BY run_id DESC LIMIT :n"
-            ),
-            {"n": limit},
-        ).fetchall()
-    return [(str(b), str(s), str(c)) for b, s, c in rows]
-
-
 _FAILED_NODES_SQL: Final = (
     "SELECT run_id, batch_id, command, status, started_at, finished_at, log_excerpt, "
     "run_results_parsed_at, failed_nodes FROM dq.pipeline_runs "
