@@ -159,6 +159,7 @@ def test_postgres_and_disk_failures_are_reported_not_raised(settings: Settings) 
 def test_harness_check_reports_a_frozen_version_and_prompt_hashes(settings: Settings) -> None:
     check = _check(_run(settings), "harness frozen")
     assert check.status is CheckStatus.PASS
+    assert "fp=" in check.detail
     assert "investigator=" in check.detail
     assert "fixer=" in check.detail
 

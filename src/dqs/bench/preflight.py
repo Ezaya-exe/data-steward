@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from dqs import db as dbmod
 from dqs import fast_reset
-from dqs.bench.harness import HARNESS_VERSION, prompt_hashes
+from dqs.bench.harness import HARNESS_VERSION, code_fingerprint, prompt_hashes
 from dqs.bench.runner import force_bench_dry_run
 from dqs.config import Settings
 from dqs.contracts import store as contracts_store
@@ -237,10 +237,14 @@ def _check_harness() -> PreflightCheck:
             detail=f"missing prompt hash/harness version: {', '.join(missing) or 'version'}",
         )
     short = ", ".join(f"{name}={value[:12]}" for name, value in sorted(hashes.items()))
+    # The fingerprint is the value a holdout run compares against the previous
+    # dev file, so printing it in full here makes "unchanged since the last run"
+    # checkable without a separate command.
+    fingerprint = code_fingerprint()
     return PreflightCheck(
         name="harness frozen",
         status=CheckStatus.PASS,
-        detail=f"{HARNESS_VERSION} ({short})",
+        detail=f"{HARNESS_VERSION} fp={fingerprint} ({short})",
     )
 
 
