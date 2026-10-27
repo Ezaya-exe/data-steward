@@ -35,7 +35,7 @@ from dqs.models.violation import Violation
 
 
 def _incident(
-    table: str, check: str, *, column: str | None = None, batch_id: str = "batch_20260131"
+    table: str | None, check: str, *, column: str | None = None, batch_id: str = "batch_20260131"
 ) -> Incident:
     now = dt.datetime(2026, 1, 31, tzinfo=dt.UTC)
     return Incident(
@@ -98,6 +98,8 @@ def _observation(scenario: Scenario, **overrides: Any) -> Observation:
         "resolution": expected.expected_resolution,
         "verification_passed": True,
         "semantic_passed": True,
+        "fix_attempted": True,
+        "fix_attempts": 1,
     }
     defaults.update(overrides)
     return Observation(**defaults)
@@ -163,6 +165,31 @@ def test_detection_requires_the_expected_check_on_the_right_table() -> None:
     )
 
 
+def test_batch_level_check_is_detected_without_a_table() -> None:
+    """`freshness.sla` is emitted with `table=None`; it must still detect (A1)."""
+    scenario = get_scenario("f8-customers-30")
+    batch_incident = _incident(None, "freshness.sla")
+    assert score_scenario(scenario, _observation(scenario, incidents=[batch_incident])).detected
+
+    # The rule is "any incident carrying the batch-level check", not the table.
+    other_table = _incident("raw.orders", "freshness.sla")
+    assert score_scenario(scenario, _observation(scenario, incidents=[other_table])).detected
+
+    # Still requires an expected check: a different batch-level incident is not it.
+    wrong_check = _incident(None, "monitor.missing_batch")
+    assert not score_scenario(scenario, _observation(scenario, incidents=[wrong_check])).detected
+
+
+def test_table_level_detection_still_requires_the_right_table() -> None:
+    scenario = get_scenario("f4-orders-status-20")
+    wrong_table = _incident("raw.customers", "nulls.rate")
+    run = score_scenario(scenario, _observation(scenario, incidents=[wrong_table]))
+    assert run.detected is False
+
+    right_table = _incident("raw.orders", "nulls.rate")
+    assert score_scenario(scenario, _observation(scenario, incidents=[right_table])).detected
+
+
 def test_false_positive_on_a_clean_control() -> None:
     control = get_scenario("clean-01")
     assert control.is_control
@@ -215,8 +242,10 @@ def _run(
     tokens_in: int = 0,
     cost: float = 0.0,
     wall: float = 0.0,
+    fix_attempted: bool | None = None,
 ) -> ScenarioRun:
     scenario = get_scenario(scenario_id)
+    pr_expected = verifier is not None
     return ScenarioRun(
         scenario_id=scenario.id,
         split=scenario.split.value,
@@ -230,7 +259,10 @@ def _run(
         verifier_passed=verifier,
         semantically_correct=semantic,
         verified_but_wrong=verifier is True and semantic is False,
-        expected_resolution="PR" if verifier is not None else "ISSUE",
+        fix_attempted=fix_attempted,
+        fix_delivered_valid=((verifier is True) if pr_expected else None),
+        expected_resolution="PR" if pr_expected else "ISSUE",
+        actual_resolution="PR" if pr_expected else "ISSUE",
         tokens_in=tokens_in,
         cost_usd=cost,
         wall_s=wall,
@@ -247,6 +279,7 @@ def test_aggregates_use_documented_denominators_and_count_errors_as_misses() -> 
             resolution=True,
             verifier=True,
             semantic=False,
+            fix_attempted=True,
             tokens_in=100,
             cost=0.5,
             wall=10.0,
@@ -286,8 +319,10 @@ def test_aggregates_use_documented_denominators_and_count_errors_as_misses() -> 
     assert overall.rc_category_accuracy == 0.5  # 1 / 2
     assert overall.rc_columns_accuracy == 0.5  # 1 / 2 column-scoped
     assert overall.resolution_accuracy == 1.0
-    assert overall.fix_validity_rate == 1.0  # 1 / 1 PR-expected
-    assert overall.semantic_rate == 0.0  # 0 / 1 PR-expected
+    assert overall.fix_delivered_valid_rate == 1.0  # 1 / 1 PR-expected
+    assert overall.verifier_pass_given_attempt == 1.0  # 1 / 1 attempted
+    assert overall.semantic_given_verified == 0.0  # 0 / 1 verified
+    assert (overall.pr_expected, overall.fix_attempted, overall.verified) == (1, 1, 1)
     assert overall.verified_but_wrong == 1
     assert overall.false_positive_rate == 0.5  # 1 / 2 controls
     assert overall.errors == 1
@@ -361,6 +396,71 @@ def test_infra_errors_are_excluded_from_every_denominator() -> None:
     assert overall.false_positive_rate is None
 
 
+# The six PR-expected scenarios that dev-run-1 forced to UNKNOWN/ISSUE before
+# plan_fix. They had zero fix attempts, so they must not be counted as failed
+# verifications (docs/review/dev-run-1-analysis.md).
+_NOT_ATTEMPTED = [
+    "f3-order-items-unit-price",
+    "f6-orders-03",
+    "f6-order-items-05",
+    "f6-payments-15",
+    "f6-customers-08",
+    "f6-order-items-15",
+]
+
+
+def test_not_attempted_pr_scenarios_are_not_failed_verifications() -> None:
+    runs: list[ScenarioRun] = []
+    for scenario_id in _NOT_ATTEMPTED:
+        scenario = get_scenario(scenario_id)
+        run = score_scenario(
+            scenario,
+            _observation(
+                scenario,
+                resolution=ResolutionType.ISSUE,
+                verification_passed=None,
+                semantic_passed=None,
+                fix_attempted=False,
+                fix_attempts=0,
+            ),
+        )
+        assert run.verifier_passed is None, "None must not be coerced to False"
+        assert run.fix_attempted is False
+        assert run.fix_delivered_valid is False
+        assert run.verified_but_wrong is False
+        runs.append(run)
+
+    overall = aggregate(runs).overall
+    assert overall.pr_expected == 6
+    assert overall.fix_attempted == 0
+    assert overall.verified == 0
+    assert overall.fix_delivered_valid == 0
+    assert overall.verifier_pass_given_attempt is None  # 0/0, not 0%
+    assert overall.semantic_given_verified is None
+    assert overall.verified_but_wrong == 0
+
+
+def test_legacy_unknown_attempt_is_excluded_from_the_attempt_denominator() -> None:
+    """Old records with `fix_attempted=None` are unknown, not failures."""
+    scenario = get_scenario("f6-orders-03")
+    run = ScenarioRun(
+        scenario_id=scenario.id,
+        split=scenario.split.value,
+        kind=scenario.kind,
+        clean=False,
+        expected_resolution="PR",
+        actual_resolution="ISSUE",
+        verifier_passed=False,
+        fix_attempted=None,
+        fix_delivered_valid=False,
+    )
+    overall = aggregate([run]).overall
+    assert overall.pr_expected == 1
+    assert overall.fix_attempted == 0
+    assert overall.verifier_pass_given_attempt is None
+    assert overall.fix_delivered_valid_rate == 0.0
+
+
 def test_metric_block_keeps_the_exact_numerators_for_confidence_intervals() -> None:
     runs = [
         _run(
@@ -370,7 +470,8 @@ def test_metric_block_keeps_the_exact_numerators_for_confidence_intervals() -> N
             columns=True,
             resolution=False,
             verifier=False,
-            semantic=False,
+            semantic=None,
+            fix_attempted=False,
         ),
         _run(
             "f4-orders-status-20",
@@ -380,6 +481,7 @@ def test_metric_block_keeps_the_exact_numerators_for_confidence_intervals() -> N
             resolution=True,
             verifier=True,
             semantic=False,
+            fix_attempted=True,
         ),
     ]
     overall = aggregate(runs).overall
@@ -387,6 +489,8 @@ def test_metric_block_keeps_the_exact_numerators_for_confidence_intervals() -> N
     assert overall.category_success == 1
     assert overall.columns_success == 1
     assert overall.resolution_success == 1
-    assert overall.fix_success == 1
-    assert overall.semantic_success == 0
+    assert overall.fix_delivered_valid == 1
+    assert overall.fix_attempted == 1
+    assert overall.verified == 1
+    assert overall.semantic_correct == 0
     assert overall.verified_but_wrong == 1

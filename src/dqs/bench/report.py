@@ -58,6 +58,15 @@ class BenchMetadata(BaseModel):
     previous_dev_run: str | None = None
     stop_reason: str | None = None
     resume_hint: str | None = None
+    # A diagnostic run (for example a four-scenario `--ids` investigation) is
+    # kept in the same file format but is never benchmark evidence.
+    diagnostic: bool = False
+    diagnostic_note: str | None = None
+    # A rescore is derived from stored records, not a new measurement. The
+    # source run id is kept so the two files can never be confused.
+    rescore_of: str | None = None
+    rescore_at: str | None = None
+    rescore_note: str | None = None
     catalogue_size: int
     fault_count: int
     control_count: int
@@ -139,10 +148,13 @@ def _seconds(value: float) -> str:
 
 _METRIC_HEADER = (
     "| scope | n | detection | RC category | RC columns | resolution | "
-    "fix valid | semantic | verified wrong | FP rate | infra | errors | "
+    "fix delivered (all PR) | verifier pass (attempted) | semantic (verified) | "
+    "verified wrong (verified) | FP rate | infra | errors | "
     "median est. cost | p90 est. cost | median wall | p90 wall |"
 )
-_METRIC_RULE = "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+_METRIC_RULE = (
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+)
 
 
 def _metric_row(scope: str, block: MetricBlock) -> str:
@@ -152,9 +164,10 @@ def _metric_row(scope: str, block: MetricBlock) -> str:
         f"{_proportion(block.category_success, block.faults)} | "
         f"{_proportion(block.columns_success, block.column_scoped)} | "
         f"{_proportion(block.resolution_success, block.faults)} | "
-        f"{_proportion(block.fix_success, block.pr_expected)} | "
-        f"{_proportion(block.semantic_success, block.pr_expected)} | "
-        f"{_proportion(block.verified_but_wrong, block.pr_expected)} | "
+        f"{_proportion(block.fix_delivered_valid, block.pr_expected)} | "
+        f"{_proportion(block.verified, block.fix_attempted)} | "
+        f"{_proportion(block.semantic_correct, block.verified)} | "
+        f"{_proportion(block.verified_but_wrong, block.verified)} | "
         f"{_proportion(block.false_positive_success, block.controls)} | "
         f"{block.infra_errors} | {block.errors} | {_money(block.median_cost_usd)} | "
         f"{_money(block.p90_cost_usd)} | {_seconds(block.median_wall_s)} | "
@@ -206,11 +219,26 @@ def render_markdown(run: BenchRunFile) -> str:
         lines.append(f"- resume: `{meta.resume_hint}`")
     if meta.discarded_scenarios:
         lines.append(f"- discarded: {', '.join(meta.discarded_scenarios)}")
+    if meta.diagnostic:
+        lines.append(
+            "- **diagnostic only:** this run is not benchmark evidence"
+            + (f" - {meta.diagnostic_note}" if meta.diagnostic_note else "")
+        )
+    if meta.rescore_of:
+        lines.append(
+            f"- **rescored:** derived from `{meta.rescore_of}`"
+            + (f" at {meta.rescore_at}" if meta.rescore_at else "")
+        )
+        if meta.rescore_note:
+            lines.append(f"- rescore note: {meta.rescore_note}")
     lines += [
         "",
         "All percentages are deterministic comparisons against the scenario answer key. "
         f"Every cost figure is recomputed from each record's stored input/output tokens and is "
         f"{_COST_LABEL}.",
+        "Fix metrics use three explicit scopes: delivered over all PR-expected scenarios, "
+        "verifier passes over attempted fixes, and semantic correctness over verified fixes. "
+        "`n/a (0/0)` means the scope is empty, not zero.",
         "",
         "## Overall",
         "",
@@ -296,6 +324,8 @@ def _outcome_key(result: ScenarioRun) -> tuple[object, ...]:
         result.rc_columns_correct,
         result.resolution_correct,
         result.verifier_passed,
+        result.fix_attempted,
+        result.fix_delivered_valid,
         result.semantically_correct,
         result.false_positive,
         result.error is not None,

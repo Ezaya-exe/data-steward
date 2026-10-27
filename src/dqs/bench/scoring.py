@@ -6,8 +6,9 @@ answer key. A scenario that errored is counted as a miss in the aggregate
 denominators — dropping it would inflate the score.
 
 Denominators are explicit (documented in `docs/phase-notes/phase-8a.md`):
-detection/category/columns/resolution over fault scenarios; fix-validity and
-semantic correctness over PR-expected scenarios; false-positive over controls.
+detection/category/columns/resolution over fault scenarios; delivered fixes over
+every PR-expected scenario; verifier passes over *attempted* fixes; semantic
+correctness over *verified* fixes; false-positive over controls.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from dqs.bench.scenarios import Scenario
+from dqs.bench.summary import StepSummary
 from dqs.models.enums import ResolutionType
 from dqs.models.incident import Incident
 from dqs.models.root_cause import RootCause
@@ -26,6 +28,11 @@ from dqs.models.root_cause import RootCause
 # RootCause category/column/report values are compared case-insensitively;
 # a model naming `raw.orders.total_amount` or `total_amount` means the same.
 _TABLE_PREFIXES: Final = ("raw.", "staging.", "marts.")
+
+# These checks describe a batch, not a table: the monitor writes them with
+# `table=None`. Matching them against a scenario's table is structurally
+# impossible, so detection is scoped to the check name instead (A1).
+BATCH_LEVEL_CHECKS: Final = frozenset({"freshness.sla", "monitor.missing_batch"})
 
 
 class Observation(BaseModel):
@@ -42,6 +49,13 @@ class Observation(BaseModel):
     resolution: ResolutionType | None = None
     verification_passed: bool | None = None
     semantic_passed: bool | None = None
+    # A fix is only "attempted" when a row exists in dq.fix_attempts. Keeping
+    # this separate from `verification_passed` prevents the old bug where
+    # "never attempted" was scored as "verification failed".
+    fix_attempted: bool | None = None
+    fix_attempts: int = 0
+    failed_criteria: list[str] = []
+    step_summary: StepSummary | None = None
     tool_calls: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -74,6 +88,15 @@ class ScenarioRun(BaseModel):
     semantically_correct: bool | None = None
     false_positive: bool | None = None
     verified_but_wrong: bool = False
+    # `None` means "not recorded" (legacy files), never "not attempted"; the
+    # aggregate only uses `True` records in the attempt-conditioned denominator.
+    fix_attempted: bool | None = None
+    fix_attempts: int = 0
+    # Resolution was PR *and* the verifier passed: the only outcome that
+    # actually delivered a validated fix.
+    fix_delivered_valid: bool | None = None
+    failed_criteria: list[str] = []
+    step_summary: StepSummary | None = None
     expected_category: str | None = None
     actual_category: str | None = None
     expected_columns: list[str] = []
@@ -100,21 +123,29 @@ class MetricBlock(BaseModel):
     # `controls`; the report uses them to show n and a Wilson interval.
     column_scoped: int = 0
     pr_expected: int = 0
+    # Fix metrics have three explicit scopes so "not attempted" can never
+    # silently become "failed":
+    #   fix_attempted  -> at least one dq.fix_attempts row existed
+    #   verified       -> the verifier passed (the denominator for semantics)
+    # `fix_delivered_valid` is measured over every PR-expected scenario.
+    fix_attempted: int = 0
+    fix_delivered_valid: int = 0
+    verified: int = 0
+    semantic_correct: int = 0
     # Numerators are stored, not recomputed from a rounded rate, so the report
     # and the confidence interval always use the exact count.
     detection_success: int = 0
     category_success: int = 0
     columns_success: int = 0
     resolution_success: int = 0
-    fix_success: int = 0
-    semantic_success: int = 0
     false_positive_success: int = 0
     detection_recall: float | None = None
     rc_category_accuracy: float | None = None
     rc_columns_accuracy: float | None = None
     resolution_accuracy: float | None = None
-    fix_validity_rate: float | None = None
-    semantic_rate: float | None = None
+    fix_delivered_valid_rate: float | None = None
+    verifier_pass_given_attempt: float | None = None
+    semantic_given_verified: float | None = None
     false_positive_rate: float | None = None
     verified_but_wrong: int = 0
     infra_errors: int = 0
@@ -147,10 +178,27 @@ def _table_name(value: str | None) -> str | None:
 
 
 def _detected(scenario: Scenario, incidents: list[Incident]) -> bool:
+    """True when the monitor raised an incident carrying an expected check.
+
+    Batch-level checks (`freshness.sla`, `monitor.missing_batch`) are emitted
+    with `table=None`, because a late or missing batch is not a table. Requiring
+    the faulted table would make those scenarios undetectable forever, so those
+    checks match on the check name alone. Table-level faults still require the
+    correct table.
+    """
     expected = scenario.expected
-    if expected is None or scenario.table is None:
+    if expected is None:
         return False
     wanted = set(expected.expected_checks)
+    batch_level = wanted & BATCH_LEVEL_CHECKS
+    if batch_level:
+        return any(
+            violation.check in batch_level
+            for incident in incidents
+            for violation in incident.violations
+        )
+    if scenario.table is None:
+        return False
     for incident in incidents:
         if _table_name(incident.table) != scenario.table.lower():
             continue
@@ -175,6 +223,9 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
         repeat=observation.repeat,
         error=observation.error,
         infra_error=observation.infra_error,
+        fix_attempts=observation.fix_attempts,
+        failed_criteria=list(observation.failed_criteria),
+        step_summary=observation.step_summary,
         tool_calls=observation.tool_calls,
         tokens_in=observation.tokens_in,
         tokens_out=observation.tokens_out,
@@ -219,8 +270,14 @@ def score_scenario(scenario: Scenario, observation: Observation) -> ScenarioRun:
     run.resolution_correct = observation.resolution is expected.expected_resolution
 
     if expected.expected_resolution is ResolutionType.PR:
-        run.verifier_passed = observation.verification_passed is True
-        run.semantically_correct = observation.semantic_passed is True
+        # No `is True` coercion: `None` means the verifier never ran, and a
+        # missing attempt must not be reported as a failed verification.
+        run.verifier_passed = observation.verification_passed
+        run.semantically_correct = observation.semantic_passed
+        run.fix_attempted = observation.fix_attempted
+        run.fix_delivered_valid = (
+            observation.resolution is ResolutionType.PR and observation.verification_passed is True
+        )
         run.verified_but_wrong = (
             observation.verification_passed is True and observation.semantic_passed is False
         )
@@ -273,12 +330,14 @@ def _block(runs: list[ScenarioRun]) -> MetricBlock:
     controls = [run for run in scored if run.clean]
     pr_expected = [run for run in faults if run.expected_resolution == ResolutionType.PR.value]
     column_scoped = [run for run in faults if run.rc_columns_correct is not None]
+    attempted = [run for run in pr_expected if run.fix_attempted is True]
+    verified = [run for run in pr_expected if run.verifier_passed is True]
     detection_success = sum(1 for run in faults if run.detected is True)
     category_success = sum(1 for run in faults if run.rc_category_correct is True)
     columns_success = sum(1 for run in column_scoped if run.rc_columns_correct is True)
     resolution_success = sum(1 for run in faults if run.resolution_correct is True)
-    fix_success = sum(1 for run in pr_expected if run.verifier_passed is True)
-    semantic_success = sum(1 for run in pr_expected if run.semantically_correct is True)
+    fix_delivered_valid = sum(1 for run in pr_expected if run.fix_delivered_valid is True)
+    semantic_correct = sum(1 for run in verified if run.semantically_correct is True)
     false_positive_success = sum(1 for run in controls if run.false_positive is True)
 
     return MetricBlock(
@@ -287,21 +346,24 @@ def _block(runs: list[ScenarioRun]) -> MetricBlock:
         controls=len(controls),
         column_scoped=len(column_scoped),
         pr_expected=len(pr_expected),
+        fix_attempted=len(attempted),
+        fix_delivered_valid=fix_delivered_valid,
+        verified=len(verified),
+        semantic_correct=semantic_correct,
         detection_success=detection_success,
         category_success=category_success,
         columns_success=columns_success,
         resolution_success=resolution_success,
-        fix_success=fix_success,
-        semantic_success=semantic_success,
         false_positive_success=false_positive_success,
         detection_recall=_ratio(detection_success, len(faults)),
         rc_category_accuracy=_ratio(category_success, len(faults)),
         rc_columns_accuracy=_ratio(columns_success, len(column_scoped)),
         resolution_accuracy=_ratio(resolution_success, len(faults)),
-        fix_validity_rate=_ratio(fix_success, len(pr_expected)),
-        semantic_rate=_ratio(semantic_success, len(pr_expected)),
+        fix_delivered_valid_rate=_ratio(fix_delivered_valid, len(pr_expected)),
+        verifier_pass_given_attempt=_ratio(len(verified), len(attempted)),
+        semantic_given_verified=_ratio(semantic_correct, len(verified)),
         false_positive_rate=_ratio(false_positive_success, len(controls)),
-        verified_but_wrong=sum(1 for run in pr_expected if run.verified_but_wrong),
+        verified_but_wrong=sum(1 for run in verified if run.verified_but_wrong),
         infra_errors=infra_errors,
         errors=sum(1 for run in scored if run.error is not None),
         total_cost_usd=round(sum(run.cost_usd for run in runs), 6),

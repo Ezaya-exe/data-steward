@@ -51,6 +51,8 @@ def _run_file(**overrides: object) -> BenchRunFile:
             rc_columns_correct=True,
             resolution_correct=True,
             verifier_passed=True,
+            fix_attempted=True,
+            fix_delivered_valid=True,
             semantically_correct=False,
             verified_but_wrong=True,
             expected_category="SOURCE_COLUMN_RENAMED",
