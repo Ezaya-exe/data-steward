@@ -363,15 +363,16 @@ def persist_attempt_payload(
     *,
     incident_id: Any,
     attempt_no: int,
-    plan: FixPlan | dict[str, Any],
+    plan: FixPlan | dict[str, Any] | None,
     result: VerificationResult,
 ) -> int:
     """Append one attempt to `dq.fix_attempts`, including unverified drafts.
 
     The retry loop persists through this one function so a rejected/invalid
     plan and a verified plan share the same attempt numbering. `plan` is a
-    `FixPlan` for anything the verifier saw, or the raw draft payload when the
-    model output could not become a `FixPlan`.
+    `FixPlan` for anything the verifier saw and `None` for a reply that never
+    became a plan; the column is then SQL NULL, never a placeholder dict, so
+    readers can test "no plan" without guessing at a shape.
     """
     payload = plan.model_dump(mode="json") if isinstance(plan, FixPlan) else plan
     try:
@@ -385,7 +386,7 @@ def persist_attempt_payload(
                 {
                     "i": incident_id,
                     "n": attempt_no,
-                    "p": json.dumps(payload),
+                    "p": None if payload is None else json.dumps(payload),
                     "v": json.dumps(result.model_dump(mode="json")),
                     "ok": result.passed,
                 },

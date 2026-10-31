@@ -12,7 +12,12 @@ incident or point verification at another batch.
 The retry loop is explicit and bounded (`MAX_FIX_ATTEMPTS`). Every attempt —
 including a draft that could not become a `FixPlan` and a plan rejected by the
 allowlist — is written to `dq.fix_attempts` with one shared attempt number
-sequence, and every model call is written to `dq.agent_steps`.
+sequence, and every model call is written to `dq.agent_steps`. A reply that
+never became a plan (empty, truncated, reasoning-only, schema-invalid) is stored
+with `plan = NULL` and criterion `fixer_output_invalid`; a parsed draft that
+violates the plan rules is stored with `plan = NULL` too, under
+`plan_validation`. Nothing that is not a `FixPlan` is ever written to the plan
+column, so every reader can rely on "row has no plan" meaning "no plan exists".
 """
 
 from __future__ import annotations
@@ -68,7 +73,8 @@ MAX_CONTEXT_SUMMARY = 500
 
 Verifier = Callable[..., VerificationResult]
 Persister = Callable[
-    [Engine | None, uuid.UUID | None, int, "FixPlan | dict[str, Any]", VerificationResult], int
+    [Engine | None, uuid.UUID | None, int, "FixPlan | dict[str, Any] | None", VerificationResult],
+    int,
 ]
 
 
@@ -329,9 +335,18 @@ def build_fix_plan(draft: FixPlanDraft, incident: Incident, root_cause: RootCaus
     )
 
 
-def _ask_fixer(client: LLMClient, messages: list[Any]) -> FixPlanDraft:
-    """Native structured output — the channel that worked for the investigator."""
-    result = client.with_structured_output(FixPlanDraft).invoke(messages)
+def _ask_fixer(
+    client: LLMClient, messages: list[Any], *, max_output_tokens: int | None = None
+) -> FixPlanDraft:
+    """Native structured output — the channel that worked for the investigator.
+
+    The completion ceiling is bound to the model call so a reasoning model
+    cannot spend an unbounded budget on hidden tokens and answer with nothing.
+    """
+    options: dict[str, Any] = {}
+    if max_output_tokens is not None and max_output_tokens > 0:
+        options["max_tokens"] = max_output_tokens
+    result = client.with_structured_output(FixPlanDraft, **options).invoke(messages)
     if isinstance(result, FixPlanDraft):
         return result
     try:
@@ -345,6 +360,12 @@ def _llm_step_hook(sink: StepSink) -> Callable[[LLMCallRecord, Any, Any], None]:
         output = response_summary(response)
         if record.error is not None:
             output = {"error": record.error}
+        # Recorded even on success: an empty reply that burned its budget on
+        # reasoning must be visible in the timeline, not only in a parse error.
+        if record.finish_reason is not None:
+            output = {**output, "finish_reason": record.finish_reason}
+        if record.reasoning_tokens is not None:
+            output = {**output, "reasoning_tokens": record.reasoning_tokens}
         sink.record(
             kind="llm",
             name=record.model,
@@ -374,7 +395,7 @@ def _default_persist(
     engine: Engine | None,
     incident_id: uuid.UUID | None,
     attempt_no: int,
-    plan: FixPlan | dict[str, Any],
+    plan: FixPlan | dict[str, Any] | None,
     result: VerificationResult,
 ) -> int:
     if engine is None:
@@ -395,6 +416,16 @@ def _rejected_result(criterion: str, detail: str) -> VerificationResult:
         failed_criteria=[criterion],
         criteria=[CriterionResult(name=criterion, passed=False, detail=detail[:2000])],
     )
+
+
+def _invalid_reply_detail(exc: BaseException, settings: Settings) -> str:
+    """A redacted, bounded reason for a reply that produced no usable plan.
+
+    The provider text can quote a key and can be several kilobytes long; only
+    the redacted head is stored in `dq.fix_attempts` and the step log.
+    """
+    raw = f"the model did not return a schema-valid fix plan: {type(exc).__name__}: {exc}"
+    return redact_secrets(raw, secrets=settings_secrets(settings))[:MAX_DETAIL_CHARS]
 
 
 def plan_attempt(
@@ -456,7 +487,7 @@ def plan_attempt(
     ]
     started = time.perf_counter()
     try:
-        draft = _ask_fixer(client, messages)
+        draft = _ask_fixer(client, messages, max_output_tokens=settings.fixer_max_output_tokens)
     except BudgetExceeded as exc:
         sink.record(
             kind="system",
@@ -466,24 +497,20 @@ def plan_attempt(
         )
         return PlanAttempt(attempt_no=attempt_no, error=str(exc), budget_exceeded=True)
     except Exception as exc:
-        detail = (
-            "the model did not return a schema-valid fix plan: "
-            f"{type(exc).__name__}: {str(exc)[:MAX_DETAIL_CHARS]}"
-        )
-        failed = _rejected_result("fixer_output", detail)
+        detail = _invalid_reply_detail(exc, settings)
+        failed = _rejected_result("fixer_output_invalid", detail)
         if engine is not None or persister is not None:
-            (persister or _default_persist)(
-                engine,
-                incident.incident_id,
-                attempt_no,
-                {"incident_id": str(incident.incident_id), "error": detail},
-                failed,
-            )
+            (persister or _default_persist)(engine, incident.incident_id, attempt_no, None, failed)
         sink.record(
             kind="system",
             name="fix_attempt_result",
             input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
-            output={"passed": False, "failed_criteria": failed.failed_criteria},
+            output={
+                "passed": False,
+                "failed_criteria": failed.failed_criteria,
+                "reason": detail,
+                "plan_stored": False,
+            },
         )
         return PlanAttempt(
             attempt_no=attempt_no,
@@ -495,25 +522,26 @@ def plan_attempt(
     try:
         plan = build_fix_plan(draft, incident, root_cause)
     except ValidationError as exc:
-        detail = f"the draft could not become a FixPlan: {exc}"
+        detail = redact_secrets(
+            f"the draft could not become a FixPlan: {exc}",
+            secrets=settings_secrets(settings),
+        )[:MAX_DETAIL_CHARS]
         failed = _rejected_result("plan_validation", detail)
         if engine is not None or persister is not None:
-            (persister or _default_persist)(
-                engine,
-                incident.incident_id,
-                attempt_no,
-                {
-                    "incident_id": str(incident.incident_id),
-                    "draft": draft.model_dump(mode="json"),
-                    "error": detail,
-                },
-                failed,
-            )
+            # The draft validates as model output but not as a plan, so there is
+            # still no plan to store; the draft itself stays in the step log.
+            (persister or _default_persist)(engine, incident.incident_id, attempt_no, None, failed)
         sink.record(
             kind="system",
             name="fix_attempt_result",
             input={"attempt_no": attempt_no, "latency_ms": _elapsed_ms(started)},
-            output={"passed": False, "failed_criteria": failed.failed_criteria},
+            output={
+                "passed": False,
+                "failed_criteria": failed.failed_criteria,
+                "reason": detail,
+                "plan_stored": False,
+                "draft": draft.model_dump(mode="json"),
+            },
         )
         return PlanAttempt(
             attempt_no=attempt_no,
