@@ -92,20 +92,26 @@ class DryRunPublisher(Publisher):
 
 
 def run_dry_run(
-    plan: FixPlan,
+    plan: FixPlan | None,
     incident: Incident,
     verification: VerificationResult,
     *,
     store: PublicationStore,
     output_dir: Path | None = None,
     settings: Settings | None = None,
-) -> PublicationResult:
+) -> PublicationResult | None:
     """Write a PR preview and record it, with the same gate/idempotency rules.
 
     Used by `dqs publish preview`, which is not a publication decision and
     therefore has no approval payload. It still refuses a failed verification
     and still de-duplicates against `dq.publications`.
+
+    A stored attempt without a plan (`plan is None`) has nothing to preview, so
+    this returns None instead of raising: the attempt is a recorded failure, not
+    a publishing error, and the caller reports it in its own words.
     """
+    if plan is None:
+        return None
     if not isinstance(verification, VerificationResult) or not verification.passed:
         raise PublicationError("refusing to preview: the fix attempt did not pass verification")
     if plan.incident_id is not None and plan.incident_id != incident.incident_id:

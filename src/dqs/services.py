@@ -359,15 +359,23 @@ def build_attempt_view(
     created_at: dt.datetime | None = None,
     project_dir: Path = PROJECT_DIR,
 ) -> FixAttemptView:
-    """Turn one stored plan+verification pair into a reviewable attempt (pure)."""
+    """Turn one stored plan+verification pair into a reviewable attempt (pure).
+
+    A NULL `plan` is a normal record: the model produced no usable plan on that
+    attempt. The view then carries the verifier's verdict and explains the
+    missing diff instead of raising.
+    """
     plan: FixPlan | None = None
     verification: VerificationResult | None = None
     diff = ""
     diff_error = ""
-    try:
-        plan = FixPlan.model_validate(plan_payload)
-    except ValidationError as exc:
-        diff_error = f"stored plan does not validate: {exc.error_count()} error(s)"
+    if plan_payload is None:
+        diff_error = "no fix plan was stored for this attempt (the model reply was invalid)"
+    else:
+        try:
+            plan = FixPlan.model_validate(plan_payload)
+        except ValidationError as exc:
+            diff_error = f"stored plan does not validate: {exc.error_count()} error(s)"
     try:
         verification = VerificationResult.model_validate(verification_payload)
     except ValidationError as exc:
@@ -494,7 +502,10 @@ def build_benchmark_view(name: str, run: BenchRunFile) -> BenchmarkView:
         BenchmarkMetadataRow(label="Tokens", value=str(metadata.tokens_total)),
         BenchmarkMetadataRow(
             label="Estimated cost",
-            value=f"${metadata.cost_usd_total:.4f} (list price)",
+            value=(
+                f"${metadata.cost_usd_total:.4f} "
+                "(estimated at list price; actual billing depends on the provider)"
+            ),
         ),
     ]
     return BenchmarkView(

@@ -1060,14 +1060,22 @@ def publish_preview(
             _fail(
                 DqsError(f"incident {incident_id} has no fix attempts; run incident plan-fix first")
             )
-        plan, verification = loaded
+        if loaded.plan is None:
+            _fail(
+                DqsError(
+                    f"incident {incident_id} has no usable fix plan: the last attempt was "
+                    "rejected before planning, so there is nothing to preview"
+                )
+            )
         result = run_dry_run(
-            plan,
+            loaded.plan,
             incident,
-            verification,
+            loaded.verification,
             store=DbPublicationStore(engine),
             settings=settings,
         )
+        if result is None:
+            _fail(DqsError(f"incident {incident_id} has no usable fix plan to preview"))
     except DqsError as exc:
         _fail(exc)
     finally:

@@ -391,7 +391,9 @@ def execute_scenario(
                 engine, incident.incident_id, fix_attempts, failed_criteria
             )
             attempt = load_latest_fix_attempt(engine, incident.incident_id)
-            observation.verification_passed = None if attempt is None else attempt[1].passed
+            observation.verification_passed = (
+                None if attempt is None else attempt.verification.passed
+            )
             if (
                 scenario.expected is not None
                 and scenario.expected.expected_resolution is ResolutionType.PR
@@ -451,7 +453,9 @@ def _semantic_oracle(
     attempt = load_latest_fix_attempt(engine, incident_id)
     if attempt is None:
         return False, "verification passed but no fix attempt was stored"
-    plan, _verification = attempt
+    plan = attempt.plan
+    if plan is None:
+        return False, "verification passed but the stored attempt carries no plan"
     assert scenario.table is not None
     key = PRIMARY_KEYS.get(scenario.table)
     if key is None:

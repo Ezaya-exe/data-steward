@@ -17,9 +17,9 @@ published yet".
 from __future__ import annotations
 
 import uuid
-from typing import Protocol
+from typing import Protocol, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -197,20 +197,34 @@ class DbPublicationStore:
             raise DatabaseError(f"could not record the publication: {exc}") from exc
 
 
-def load_latest_fix_attempt(
-    engine: Engine, incident_id: uuid.UUID
-) -> tuple[FixPlan, VerificationResult] | None:
+class StoredFixAttempt(BaseModel):
+    """One `dq.fix_attempts` row as read by the preview, UI and runner paths.
+
+    `plan` is None when the attempt never produced a plan (an invalid, empty or
+    truncated fixer reply). That is a recorded outcome, not a publishing error.
+    """
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=False)
+
+    attempt_no: int
+    plan: FixPlan | None = None
+    verification: VerificationResult
+
+
+def load_latest_fix_attempt(engine: Engine, incident_id: uuid.UUID) -> StoredFixAttempt | None:
     """Read the newest `dq.fix_attempts` row for an incident.
 
-    Returns None when no attempt exists. A row that is not a valid
-    plan+verification pair is an error, not something to paper over: the
-    preview would otherwise show a diff that was never verified.
+    Returns None when no attempt exists. A row with `plan IS NULL` is a normal
+    outcome, not an error: the model produced no usable plan, the attempt is
+    still counted, and the caller (issue, UI, benchmark runner) must render or
+    record it without pretending a plan exists. Rows that *do* carry a plan and
+    still fail validation are genuine corruption and raise.
     """
     try:
         with engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT plan, verification FROM dq.fix_attempts "
+                    "SELECT attempt_no, plan, verification FROM dq.fix_attempts "
                     "WHERE incident_id = :i "
                     "ORDER BY attempt_no DESC, attempt_id DESC LIMIT 1"
                 ),
@@ -220,22 +234,24 @@ def load_latest_fix_attempt(
         raise DatabaseError(f"could not read dq.fix_attempts: {exc}") from exc
     if row is None:
         return None
-    plan_payload, verification_payload = row
-    if plan_payload is None:
-        raise PublicationError(
-            "the latest fix attempt has no valid plan (it was rejected before planning)"
-        )
+    attempt_no, plan_payload, verification_payload = row
     try:
-        plan = FixPlan.model_validate(plan_payload)
         verification = VerificationResult.model_validate(verification_payload)
     except ValidationError as exc:
         raise PublicationError(f"the latest fix attempt does not validate: {exc}") from exc
-    return plan, verification
+    plan: FixPlan | None = None
+    if plan_payload is not None:
+        try:
+            plan = FixPlan.model_validate(plan_payload)
+        except ValidationError as exc:
+            raise PublicationError(f"the latest fix attempt does not validate: {exc}") from exc
+    return StoredFixAttempt(attempt_no=cast(int, attempt_no), plan=plan, verification=verification)
 
 
 __all__ = [
     "DbPublicationStore",
     "MemoryPublicationStore",
     "PublicationStore",
+    "StoredFixAttempt",
     "load_latest_fix_attempt",
 ]
