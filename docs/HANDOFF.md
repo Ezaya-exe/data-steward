@@ -1,11 +1,42 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-27 (Phase 8c scoring, cap diagnosis and investigator fix; no final benchmark)
+Last updated: 2026-10-31 (dev-run-2 analysis; null-plan fix attempts and fixer output ceiling; harness `8c.2`; no benchmark)
 · Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **The newest full dev run was analysed read-only, and the fixer-failure path
+  it exposed was hardened (`8c.2`).** Analysis:
+  `docs/review/dev-run-2-analysis.md` (source
+  `benchmarks/results/20261028T130606Z_deepseek-deepseek-v4.1-flash.json`,
+  harness `8c.1`, clean worktree). Run 2 scored detection 37/37, RC category
+  35/37, columns 27/27, resolution 35/37, fixes delivered 11/13, verifier pass
+  12/13, semantic 12/12, verified-but-wrong 0/12, control FP 0/6, one scenario
+  `error`, 2,086.9 s, ≈1.03M tokens. Four scenarios were not fully correct:
+  `f2-customers-email` and `f5-order-items-product-35` (model errors),
+  `f6-customers-08` (an empty all-reasoning fixer reply plus a harness bug) and
+  `f6-order-items-15` (a verified fix mis-routed to an ISSUE by a budget flag).
+- **Harness `8c.2` (this session, no benchmark run).** An invalid fixer reply
+  is now persisted as a real attempt with `plan = NULL`, `passed = false`,
+  criterion `fixer_output_invalid` and a redacted reason — never an error dict
+  in the plan column. Such an attempt is retried, counted toward
+  `MAX_FIX_ATTEMPTS`, and listed in the issue when the attempts run out.
+  `load_latest_fix_attempt` returns a typed `StoredFixAttempt` (a null plan is
+  normal) and `run_dry_run` accepts `FixPlan | None` (returns `None`, writes no
+  preview) instead of raising, so the publisher, issue builder, PR body, UI
+  service layer and benchmark runner all tolerate it. The fixer completion is
+  capped by `FIXER_MAX_OUTPUT_TOKENS` (default 8192), and every model call
+  records `finish_reason` + `reasoning_tokens`. Cost wording is now "estimated
+  at list price; actual billing depends on the provider". DECISIONS 156–163.
+- **Left unfixed on purpose (owner decision, not in this pass):**
+  `route_after_verification` checks `budget_exceeded` **before**
+  `verification_passed`, so a verified fix is filed as an ISSUE whenever the
+  investigator hit the tool ceiling (`f6-order-items-15`). Also deferred:
+  `get_batch_profile` reporting a header-absent column as `null_rate=1.0`
+  (`f2-customers-email`) and the `required_in_batch: true` contract for the
+  day-1-only `raw.products` dimension (`f5-order-items-product-35`). All three
+  are documented in the analysis above.
 - **Phase 8c work is implemented, verified and ready for owner review (scoring
   corrections, cap diagnosis, investigator fix).** Report:
   `docs/phase-notes/phase-8c.md`. Detection now matches
@@ -169,19 +200,21 @@ docs/ARCHITECTURE.md is design.
   `dqs llm smoke`, `tools/` (`base`, `sql_guard`, `readonly_sql`, `profiling`,
   `renames`, `dbt_tools`, `contracts_tool`, `lineage_tool`, `registry`),
   `dbt_run.latest_run`, DECISIONS 62–69.
-- Tests: **722 unit** passing on 2026-10-27 (1 skipped: real OS symlink
-  creation on Windows), plus the full integration suite **100 passed, 6 skipped**
-  (the LLM-gated suites need `RUN_LLM_TESTS=1`). ruff check/format and `mypy src`
-  are clean (104 source files, 219 files formatted). Run `dqs dev test-int` for
-  the integration set. Phase 8b prep adds unit coverage for preflight, the token
-  ledger, Wilson intervals, infra exclusion, circuit breaker/resume, repeats,
-  fingerprint acknowledgement and the report's stability/infra sections. Phase
-  8c adds unit coverage for batch-level detection, the three fix scopes,
-  step summaries, rescore refusal/legacy policy, `calls_remaining`, budget
-  synthesis, invalid-output fallback, provenance filtering and the 0.6 PR
-  boundary. The
-  same commands also passed in a clean clone with freshly resolved dependencies
-  on 2026-10-27.
+- Tests: **737 unit** passing on 2026-10-31 (1 skipped: real OS symlink
+  creation on Windows), plus the full integration suite (the LLM-gated suites
+  need `RUN_LLM_TESTS=1`). ruff check/format and `mypy src` are clean (104
+  source files). Run `dqs dev test-int` for the integration set. Phase 8b prep
+  adds unit coverage for preflight, the token ledger, Wilson intervals, infra
+  exclusion, circuit breaker/resume, repeats, fingerprint acknowledgement and
+  the report's stability/infra sections. Phase 8c adds unit coverage for
+  batch-level detection, the three fix scopes, step summaries, rescore
+  refusal/legacy policy, `calls_remaining`, budget synthesis, invalid-output
+  fallback, provenance filtering and the 0.6 PR boundary. Harness `8c.2` adds
+  unit coverage for a null-plan attempt (fixer loop, issue listing, store
+  reader, dry-run helper, UI detail view, benchmark runner) and for
+  `finish_reason`/reasoning-token recording and the structured-output ceiling.
+  The same commands also passed in a clean clone with freshly resolved
+  dependencies on 2026-10-27.
 - Real-model evidence (2026-10-20, Phase 4b, `openai/gpt-oss-120b` via
   `openai_compatible`): F1 rename 0.93/PR, F4 nulls 0.93/ISSUE, F6 duplicates
   0.95/PR; all schema-valid. Full timelines/JSON in git-ignored
@@ -400,7 +433,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 | `AGENTS.md` | Rules: protocol, guardrails (§7), testing rules (§8), phase-note template (§9) |
 | `docs/PHASES.md` | Order of work + per-phase acceptance criteria (the checklist to satisfy) |
 | `docs/ARCHITECTURE.md` | Design doc: §4 data model, §5 dbt, §6 faults, §7 contracts/checks, §10 agents, §11 verification, §14 benchmark |
-| `docs/DECISIONS.md` | Open decisions I logged (155 entries); read the phase sections you extend |
+| `docs/DECISIONS.md` | Open decisions I logged (163 entries); read the phase sections you extend |
 | `src/dqs/sim/generator.py` | Deterministic 5-table generator; seeding + ID allocation invariants |
 | `src/dqs/sim/loader.py` | Schema-evolving raw loader; bulk `COPY` per table in one atomic per-batch transaction; dq metadata |
 | `src/dqs/dbt_run.py` | The ONE dbt entry point; records `dq.pipeline_runs` with 4 KB logs |
@@ -529,8 +562,9 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   workflow/publish/tool/check modules never import `dqs.bench`.
 - `dq.fix_attempts` attempt numbers are allocated with `MAX(attempt_no)+1` and
   have no unique constraint; concurrent fixers for one incident can collide.
-  The fixer has no tool fallback: a provider that cannot emit `FixPlanDraft`
-  produces a failed `fixer_output` attempt.
+  The fixer has no tool fallback, but since `8c.2` a provider that cannot emit
+  `FixPlanDraft` produces a stored `fixer_output_invalid` attempt with a NULL
+  plan (retried, counted and reported) instead of an unreadable error dict.
 - Exact-match patch strings are byte-sensitive; the dbt project is LF-normalized.
   The real OS symlink creation test is skipped on this Windows account;
   junction and simulated-symlink coverage pass.
@@ -573,6 +607,11 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
 - `dqs publish preview` remains a single dry-run render with no approval
   payload. The workflow's `publish` node is the approval-aware path; the ISSUE
   route is reachable through `dqs incident run`, not a standalone CLI command.
+- **`route_after_verification` still checks `budget_exceeded` before
+  `verification_passed`** (`src/dqs/workflow/graph.py`). A verified fix is
+  therefore filed as an ISSUE whenever the investigator reached the tool
+  ceiling; dev run 2 lost one PR to it (`f6-order-items-15`). Deliberately not
+  changed in the `8c.2` pass (out of the requested scope).
 - **`dqs demo` clones the cached template**: the first demo/bench on a machine
   builds `dqs_template` (~10 s measured; the old 30× full-build path was 142 s),
   then each demo is a `CREATE DATABASE … TEMPLATE` clone (~0.1 s). The workflow
@@ -622,7 +661,9 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   200K/day cap - a planning estimate, not a measurement. The template content
   hash covers generator + contracts + dbt content, not `sim/loader.py`; a hard
   kill can leave one `dqs_bench_*` DB (the next run drops it). Daily-quota
-  detection is provider-text based; prompts are frozen at harness `8c.1`.
+  detection is provider-text based; prompts are frozen (unchanged since harness
+  `8c.1`; the harness is now `8c.2`, so the code fingerprint differs from that
+  run).
 - A benchmark results file is one model/provider per file (`--resume` refuses a
   mismatch). Holdout requires `--confirm-holdout` and must not guide prompt
   tuning (AGENTS §7.9). A holdout/all run also requires

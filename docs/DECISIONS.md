@@ -1057,3 +1057,59 @@ entry each; newest last.
      says the answer came from the evidence already gathered or was escalated to
      UNKNOWN when that final answer failed. The `budget_exceeded` flag itself is
      unchanged, so verification routing keeps its existing meaning.
+156. **An invalid fixer reply is a stored attempt with `plan = NULL`.** A reply
+     that never became a `FixPlan` (empty content, reasoning-only/truncated,
+     schema-invalid, or a parsed draft that violates the plan rules) is persisted
+     with `plan = NULL`, `passed = false`, criterion `fixer_output_invalid` (or
+     `plan_validation` for a parsed draft), and a redacted, bounded reason.
+     Nothing that is not a `FixPlan` is written to the `plan` column (the old
+     `{"error": …}` placeholder is gone), so every reader can treat "plan IS
+     NULL" as "no plan exists". Reason: dev run 2 (`f6-customers-08`) stored an
+     error dict in the plan column, and a later reader raised
+     `PublicationError`, turning an already-published issue into a scenario
+     `error` and losing its token counters.
+157. **A null-plan attempt is retried, counted and reported like any other
+     failure.** `plan_attempt` returns a failed `PlanAttempt`; the workflow counts
+     it toward `MAX_FIX_ATTEMPTS`, feeds its criterion back to the next attempt,
+     and the issue builder lists every failed attempt (`_attempts_section`
+     already renders a missing plan as "no valid plan produced"). Reason: an
+     empty reply is a real failed attempt and must not silently vanish.
+158. **`load_latest_fix_attempt` returns a typed `StoredFixAttempt`, not a
+     tuple.** The model exposes `attempt_no`, `plan: FixPlan | None` and
+     `verification`. It returns `None` only when no row exists and raises
+     `PublicationError` only for genuinely corrupt payloads (a non-null plan or a
+     verification that fails validation); a null plan is a normal result. Call
+     sites read `.plan`/`.verification` explicitly; `run_dry_run` accepts
+     `FixPlan | None` and returns `None` (no preview written) for a null plan
+     instead of raising. Reason: a recorded failure is not a publishing error.
+159. **The fixer's completion is capped by `FIXER_MAX_OUTPUT_TOKENS` (default
+     8192).** The bound is applied through
+     `LLMClient.with_structured_output(schema, **kwargs)`; options the installed
+     chat model does not declare are dropped with a log line rather than failing
+     the call (`_supported_model_kwargs`), so a provider or test double without
+     `max_tokens` still works. Reason: dev-run-2 attempt 3 spent all 3,948
+     completion tokens on hidden reasoning and returned no message body.
+160. **Every model call records `finish_reason` and `reasoning_tokens`.**
+     `LLMCallRecord` gains both fields, read by `_response_details` from
+     `usage_metadata.output_token_details.reasoning` or the OpenAI-compatible
+     (`response_metadata.token_usage.completion_tokens_details.reasoning_tokens`)
+     shape; the fixer's step-log hook writes them next to the call. Reason: an
+     all-reasoning empty reply must be visible as such, not only as a parse
+     error.
+161. **Cost wording is "estimated at list price; actual billing depends on the
+     provider".** It replaces "free tier used, nothing was billed" in the
+     benchmark report and the UI metadata, because the harness cannot assert a
+     billing fact. Old result files are not re-rendered.
+162. **`HARNESS_VERSION` is `8c.2`.** The fixer/verification/publish/runner
+     plumbing changed (null-plan attempts, output ceiling, finish-reason logging)
+     without touching the investigator prompt, tools, scorer, scenarios, oracle
+     or injectors. The code fingerprint also changes; the bump documents the
+     intentional change. The `route_after_verification` ordering defect found in
+     dev run 2 (budget checked before verified) is **not** fixed in this pass and
+     is left for the owner (`docs/review/dev-run-2-analysis.md` §4).
+163. **The day-1-dimension contract ambiguity and the header-absence presentation
+     are out of scope for this pass.** The `required_in_batch: true` contract for
+     `raw.products` (empty after day 1) that misled `f5-order-items-product-35`,
+     and `get_batch_profile` reporting a header-absent column as
+     `null_rate=1.0` for `f2-customers-email`, are documented in
+     `docs/review/dev-run-2-analysis.md` but not changed here.
