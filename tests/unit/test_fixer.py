@@ -413,10 +413,10 @@ def test_unparseable_model_output_is_counted_and_persisted_as_a_failed_attempt()
         _engine: Any,
         _incident_id: Any,
         attempt_no: int,
-        plan: FixPlan | dict[str, Any],
+        plan: FixPlan | dict[str, Any] | None,
         _result: VerificationResult,
     ) -> int:
-        persisted.append((attempt_no, "plan" if isinstance(plan, FixPlan) else "draft"))
+        persisted.append((attempt_no, "plan" if isinstance(plan, FixPlan) else "null"))
         return attempt_no
 
     incident = _incident()
@@ -436,8 +436,8 @@ def test_unparseable_model_output_is_counted_and_persisted_as_a_failed_attempt()
     assert result.passed is True
     assert result.attempts_used == 2
     assert result.attempts[0].plan is None
-    assert result.attempts[0].verification.failed_criteria == ["fixer_output"]
-    assert persisted == [(1, "draft"), (2, "plan")]
+    assert result.attempts[0].verification.failed_criteria == ["fixer_output_invalid"]
+    assert persisted == [(1, "null"), (2, "plan")]
 
 
 def test_model_schema_cannot_choose_incident_context() -> None:

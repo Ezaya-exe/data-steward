@@ -21,7 +21,7 @@ from typer.testing import CliRunner
 from dqs.cli import app as dqs_app
 from dqs.config import Settings
 from dqs.publish.base import PublicationKind, PublicationMode, PublicationResult
-from dqs.publish.store import MemoryPublicationStore
+from dqs.publish.store import MemoryPublicationStore, StoredFixAttempt
 
 
 class _FakeEngine:
@@ -42,7 +42,9 @@ def fake_cli(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     )
     monkeypatch.setattr(
         "dqs.cli.load_latest_fix_attempt",
-        lambda engine, incident_id: (make_plan(), make_verification()),
+        lambda engine, incident_id: StoredFixAttempt(
+            attempt_no=1, plan=make_plan(), verification=make_verification()
+        ),
     )
     monkeypatch.setattr("dqs.cli.DbPublicationStore", lambda engine: MemoryPublicationStore())
 

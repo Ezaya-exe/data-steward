@@ -24,7 +24,7 @@ from dqs.agents.fixer import CandidateModel
 from dqs.agents.llm import BudgetTracker, LLMClient
 from dqs.agents.steps import MemoryStepSink, StepSink
 from dqs.config import Settings
-from dqs.errors import WorkflowError
+from dqs.errors import LLMError, WorkflowError
 from dqs.models.enums import (
     ImpactScope,
     IncidentStatus,
@@ -151,6 +151,10 @@ class WorkflowChatModel(BaseChatModel):
     root_cause: dict[str, Any] = Field(default_factory=_root_cause)
     drafts: list[dict[str, Any]] = Field(default_factory=lambda: [_draft()])
     calls: int = 0
+    # Simulates the dev-run-2 empty reply: the provider answered with nothing
+    # (finish_reason='error', every completion token spent on reasoning). The
+    # count is the number of fixer calls that answer empty.
+    fail_drafts: int = 0
     _mode: str = PrivateAttr(default="loop")
     _draft_index: int = PrivateAttr(default=0)
 
@@ -183,6 +187,9 @@ class WorkflowChatModel(BaseChatModel):
         _ = messages, stop, run_manager, kwargs
         self.calls += 1
         if self._mode == "fixer":
+            if self.fail_drafts > 0:
+                self.fail_drafts -= 1
+                raise LLMError("structured output could not be parsed: empty content")
             if not self.drafts:
                 raise AssertionError("the test scripted no fix drafts")
             # Reuse the last draft on a retry so one scripted plan can be
@@ -429,6 +436,53 @@ def test_exhausted_attempts_file_an_issue_with_every_attempt(tmp_path: Path) -> 
     issue_md = publisher.issue_calls[0][0].markdown
     assert "Attempt 1" in issue_md
     assert "Attempt 2" in issue_md
+    assert journal.resolution is not None
+    assert journal.resolution["type"] == "ISSUE"
+
+
+def test_an_empty_fixer_reply_then_a_valid_one_publishes_the_second_attempt(
+    tmp_path: Path,
+) -> None:
+    """The dev-run-2 shape: no plan on attempt 1 must not stop the retry loop."""
+    incident = _incident()
+    chat = WorkflowChatModel(fail_drafts=1)
+    deps, publisher, _journal, _ = _deps(
+        incident, chat=chat, verdicts=[True], settings=_settings(max_fix_attempts=3)
+    )
+    workflow, outcome = _run(deps, incident, tmp_path, auto_approve=True)
+    workflow.close()
+
+    assert outcome.error is None
+    assert outcome.attempts == 2
+    assert outcome.resolution_type is ResolutionType.PR
+    assert len(publisher.pr_calls) == 1
+    assert publisher.pr_calls[0][0] is not None
+
+
+def test_three_invalid_fixer_replies_file_an_issue_listing_every_attempt(
+    tmp_path: Path,
+) -> None:
+    """An invalid reply is an attempt: it is retried, counted, and reported."""
+    incident = _incident()
+    chat = WorkflowChatModel(fail_drafts=3)
+    deps, publisher, journal, _ = _deps(
+        incident, chat=chat, verdicts=[True], settings=_settings(max_fix_attempts=3)
+    )
+    workflow, outcome = _run(deps, incident, tmp_path, auto_approve=True)
+    workflow.close()
+
+    assert outcome.error is None
+    assert outcome.completed is True
+    assert outcome.resolution_type is ResolutionType.ISSUE
+    assert outcome.attempts == 3
+    assert publisher.pr_calls == []
+    assert len(publisher.issue_calls) == 1
+    issue_md = publisher.issue_calls[0][0].markdown
+    assert "no valid plan produced" in issue_md
+    assert issue_md.count("no valid plan produced") == 3
+    # Each attempt lists the criterion twice: in "Failed criteria" and as a
+    # per-criterion verdict line.
+    assert issue_md.count("fixer_output_invalid") == 6
     assert journal.resolution is not None
     assert journal.resolution["type"] == "ISSUE"
 

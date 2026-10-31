@@ -530,6 +530,109 @@ def test_execute_scenario_rejects_the_warehouse_name_before_touching_postgres(
         runner.fast_reset.clone_database(settings, "dqs_template", "warehouse")
 
 
+def test_execute_scenario_records_a_null_plan_attempt_without_an_error(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored attempt with no plan is a recorded outcome, not a scenario error.
+
+    Dev run 2 (`f6-customers-08`) published the issue and then failed the whole
+    scenario because `load_latest_fix_attempt` raised on `plan=NULL`, losing the
+    token counters. Here the same shape must be scored with its tokens intact.
+    """
+    import uuid
+
+    from dqs.agents.llm import BudgetTracker, LLMCallRecord
+    from dqs.models.enums import ResolutionType
+    from dqs.models.fix import CriterionResult, VerificationResult
+    from dqs.publish.store import StoredFixAttempt
+
+    incident_id = uuid.uuid4()
+    verification = VerificationResult.from_criteria(
+        [CriterionResult(name="fixer_output_invalid", passed=False, detail="empty reply")]
+    )
+    stored = StoredFixAttempt(attempt_no=3, plan=None, verification=verification)
+
+    tracker = BudgetTracker(max_tool_calls=10, max_tokens=100_000, timeout_seconds=900)
+    tracker.record_tool_call()
+    fake_client = SimpleNamespace(
+        budget=tracker,
+        calls=[
+            LLMCallRecord(
+                provider="fake",
+                model="fake-1",
+                latency_ms=1,
+                input_tokens=123,
+                output_tokens=45,
+                total_tokens=168,
+            )
+        ],
+    )
+
+    class _FakeToolContext:
+        @classmethod
+        def from_settings(cls, *_args: Any, **_kwargs: Any) -> _FakeToolContext:
+            return cls()
+
+        def close(self) -> None:
+            pass
+
+    class _FakeWorkflow:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> _FakeWorkflow:
+            return self
+
+        def __exit__(self, *_exc: Any) -> bool:
+            return False
+
+        def run(self, _incident_id: Any, **_kwargs: Any) -> Any:
+            return SimpleNamespace(
+                resolution_type=ResolutionType.ISSUE, error=None, interrupted=False
+            )
+
+    fake_engine = SimpleNamespace(dispose=lambda: None)
+    monkeypatch.setattr(runner.fast_reset, "clone_template", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner.sim_pipeline, "load_day", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner.dbmod, "make_rw_engine", lambda _settings: fake_engine)
+    monkeypatch.setattr(runner.fast_reset, "drop_database", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        runner.monitor_mod, "run_monitor", lambda *_a, **_k: SimpleNamespace(created=[incident_id])
+    )
+    monkeypatch.setattr(
+        runner.incidents_mod,
+        "get_incident",
+        lambda _engine, _incident_id: SimpleNamespace(
+            incident_id=incident_id,
+            table="orders",
+            violations=[SimpleNamespace(check="schema.missing_column")],
+        ),
+    )
+    monkeypatch.setattr(runner, "ToolContext", _FakeToolContext)
+    monkeypatch.setattr(runner, "make_deps", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(runner, "IncidentWorkflow", _FakeWorkflow)
+    monkeypatch.setattr(runner, "load_fix_history", lambda *_a, **_k: (3, ["fixer_output_invalid"]))
+    monkeypatch.setattr(runner, "_safe_step_summary", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner, "_root_cause_from_incident", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner, "load_latest_fix_attempt", lambda *_a, **_k: stored)
+
+    result = runner.execute_scenario(
+        settings,
+        runner.BenchOptions(model="test-model", no_dbt=True),
+        get_scenario("f1-orders-status"),
+        contracts={},
+        client_factory=lambda *_a, **_k: fake_client,
+    )
+
+    assert result.error is None
+    assert result.infra_error is None
+    assert result.verifier_passed is False
+    assert result.fix_attempts == 3
+    assert result.failed_criteria == ["fixer_output_invalid"]
+    assert result.tokens_in == 123
+    assert result.tokens_out == 45
+
+
 def test_two_consecutive_infra_errors_trip_the_circuit_breaker(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

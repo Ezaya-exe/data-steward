@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel
 
 from dqs.agents.llm import (
     BudgetTracker,
@@ -18,6 +19,8 @@ from dqs.agents.llm import (
     LLMCallRecord,
     LLMClient,
     RetryRecord,
+    _response_details,
+    _supported_model_kwargs,
     get_llm,
     is_daily_quota_error,
     redact_secrets,
@@ -401,3 +404,88 @@ class _Clock:
 
     def advance(self, seconds: float) -> None:
         self._now += seconds
+
+
+# --- provider failure details and the output ceiling -----------------------------------
+
+
+class _ReasoningRun:
+    """Returns one provider message with a finish reason and reasoning usage."""
+
+    def __init__(self, message: AIMessage) -> None:
+        self.message = message
+
+    def invoke(self, messages: object, **kwargs: object) -> AIMessage:
+        _ = messages, kwargs
+        return self.message
+
+
+def _reasoning_message(metadata: dict[str, Any], usage: dict[str, Any]) -> AIMessage:
+    message = AIMessage(content="")
+    message.response_metadata = metadata
+    message.usage_metadata = usage
+    return message
+
+
+def test_client_records_the_finish_reason_and_reasoning_tokens(settings: Settings) -> None:
+    """An empty all-reasoning reply must be visible in the call record."""
+    message = _reasoning_message(
+        {"finish_reason": "error", "token_usage": {"completion_tokens_details": {}}},
+        {
+            "input_tokens": 120,
+            "output_tokens": 3948,
+            "total_tokens": 4068,
+            "output_token_details": {"reasoning": 3948},
+        },
+    )
+    client = LLMClient(_ReasoningRun(message), provider="fake", model="reasoning-fake")  # type: ignore[arg-type]
+
+    client.invoke("hello")
+
+    call = client.calls[0]
+    assert call.finish_reason == "error"
+    assert call.reasoning_tokens == 3948
+    assert call.output_tokens == 3948
+
+
+def test_response_details_reads_the_openai_compatible_reasoning_counter() -> None:
+    message = _reasoning_message(
+        {
+            "finish_reason": "length",
+            "token_usage": {"completion_tokens_details": {"reasoning_tokens": 512}},
+        },
+        {"input_tokens": 10, "output_tokens": 512, "total_tokens": 522},
+    )
+
+    assert _response_details(message) == ("length", 512)
+
+
+def test_response_details_is_empty_for_a_plain_message() -> None:
+    assert _response_details(AIMessage(content="plain")) == (None, None)
+
+
+def test_unsupported_structured_output_options_are_dropped_not_raised() -> None:
+    """`max_tokens` is optional: a model without that field must still answer."""
+
+    class _NoLimit(FakeChatModel):
+        pass
+
+    applied = _supported_model_kwargs(_NoLimit(), {"max_tokens": 8192})
+    assert applied == {}
+    # And the structured call itself still works with an unsupported option.
+    client = LLMClient(_NoLimit(), provider="fake", model="fake-1")
+    result = client.with_structured_output(_Example, max_tokens=8192).invoke("hello")
+    assert isinstance(result, _Example)
+
+
+def test_supported_structured_output_options_are_bound() -> None:
+    class _DeclaresLimit(FakeChatModel):
+        max_tokens: int | None = None
+
+    assert _supported_model_kwargs(_DeclaresLimit(), {"max_tokens": 8192}) == {"max_tokens": 8192}
+
+
+class _Example(BaseModel):
+    """Minimal structured-output schema used by the ceiling tests."""
+
+    label: str

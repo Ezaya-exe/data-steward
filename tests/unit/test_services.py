@@ -258,6 +258,28 @@ def test_build_attempt_view_survives_a_corrupt_plan() -> None:
     assert attempt.checklist == []
 
 
+def test_build_attempt_view_handles_a_null_plan_attempt() -> None:
+    """An invalid fixer reply is a stored attempt, not a crash in the detail view."""
+    attempt = services.build_attempt_view(
+        3,
+        None,
+        VerificationResult.from_criteria(
+            [CriterionResult(name="fixer_output_invalid", passed=False, detail="empty reply")]
+        ).model_dump(mode="json"),
+        passed=False,
+        created_at=NOW,
+    )
+
+    assert attempt.verification_passed is False
+    assert attempt.summary == ""
+    assert attempt.target_files == []
+    assert attempt.diff == ""
+    assert "no fix plan was stored" in attempt.diff_error
+    detail = services.build_incident_detail(make_incident(), attempts=[attempt])
+    assert detail.latest_diff == ""
+    assert "no fix plan was stored" in detail.latest_diff_error
+
+
 # --- incident detail ------------------------------------------------------------------
 
 

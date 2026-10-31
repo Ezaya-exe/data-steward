@@ -22,7 +22,7 @@ from tests.helpers.publish import (
 
 from dqs.errors import PublicationError
 from dqs.publish.base import ApprovalDecision, PublicationKind
-from dqs.publish.dry_run import DryRunPublisher
+from dqs.publish.dry_run import DryRunPublisher, run_dry_run
 from dqs.publish.store import MemoryPublicationStore
 
 
@@ -41,6 +41,23 @@ def test_create_pr_without_an_approval_argument_raises_type_error(tmp_path) -> N
         publisher.create_pr(  # type: ignore[call-arg]
             make_plan(), make_incident(), make_verification()
         )
+
+
+def test_run_dry_run_without_a_plan_writes_nothing_and_does_not_raise(tmp_path) -> None:
+    """An attempt that never produced a plan is a recorded failure, not a crash."""
+    store = MemoryPublicationStore()
+
+    result = run_dry_run(
+        None,
+        make_incident(),
+        make_verification(),
+        store=store,
+        output_dir=tmp_path,
+    )
+
+    assert result is None
+    assert list(tmp_path.iterdir()) == []
+    assert store.find(INCIDENT_ID, PublicationKind.PR) is None
 
 
 def test_create_pr_with_a_plain_dict_is_refused(tmp_path) -> None:

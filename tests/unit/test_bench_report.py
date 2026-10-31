@@ -218,7 +218,7 @@ def test_markdown_recomputes_cost_from_stored_tokens_with_the_price_table(
     assert "$999" not in markdown
     assert "$0.7500" in markdown
     assert "pricing: $0.15/1M input, $0.6/1M output" in markdown
-    assert "estimated at list price; free tier used, nothing was billed" in markdown
+    assert "estimated at list price; actual billing depends on the provider" in markdown
 
     # Editing the table must change the same old results file's estimate.
     monkeypatch.setitem(LLM_PRICE_TABLE, "openai/gpt-oss-120b", (1.0, 2.0))
