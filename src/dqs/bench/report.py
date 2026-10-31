@@ -24,9 +24,10 @@ from dqs.bench.scoring import (
 from dqs.config import estimate_cost_usd, price_for_model
 
 # Every dollar figure in the report is a list-price estimate, never an invoice:
-# benchmark runs used provider free tiers. Keep the exact wording in one place
-# so a new cost column cannot be added without the disclaimer.
-_COST_LABEL = "estimated at list price; free tier used, nothing was billed"
+# actual billing depends on the provider (some runs used a free tier). Keep the
+# exact wording in one place so a new cost column cannot be added without the
+# disclaimer.
+_COST_LABEL = "estimated at list price; actual billing depends on the provider"
 
 
 class BenchMetadata(BaseModel):
@@ -111,9 +112,8 @@ def _repriced_scenarios(model: str, scenarios: list[ScenarioRun]) -> list[Scenar
     """Re-price every record from its stored tokens with the current price table.
 
     Costs are deliberately not trusted from the results JSON: a price-table edit
-    must also update files produced before the edit (the pilot run stored 0.0
-    because it used a free tier). Scoring itself is untouched; only the cost
-    field on a copy is replaced.
+    must also update files produced before the edit (the pilot run stored 0.0).
+    Scoring itself is untouched; only the cost field on a copy is replaced.
     """
     return [
         run.model_copy(
