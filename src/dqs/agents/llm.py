@@ -214,6 +214,11 @@ class LLMCallRecord(BaseModel):
     tool_calls: int = 0
     retries: int = 0
     error: str | None = None
+    # Why: a reasoning model can spend its entire completion budget on hidden
+    # reasoning and return an empty message. Without these two numbers that
+    # failure is indistinguishable from a schema bug (dev run 2, F6-08).
+    finish_reason: str | None = None
+    reasoning_tokens: int | None = None
 
 
 class RetryRecord(BaseModel):
@@ -386,7 +391,53 @@ def _usage_counts(response: Any) -> tuple[int, int, int]:
     return input_tokens, output_tokens, total_tokens
 
 
+def _response_details(response: Any) -> tuple[str | None, int | None]:
+    """(finish_reason, reasoning_tokens) from one raw provider message.
+
+    Newer providers report reasoning under `usage_metadata.output_token_details`;
+    the OpenAI-compatible shape nests the same number inside `token_usage`.
+    Both are read because the benchmark uses an OpenAI-compatible endpoint whose
+    extra fields LangChain only partly normalizes.
+    """
+    metadata = getattr(response, "response_metadata", None) or {}
+    raw_finish = metadata.get("finish_reason") if isinstance(metadata, dict) else None
+    finish_reason = str(raw_finish) if raw_finish is not None else None
+
+    reasoning: int | None = None
+    usage = getattr(response, "usage_metadata", None) or {}
+    details = usage.get("output_token_details") if isinstance(usage, dict) else None
+    if isinstance(details, dict) and details.get("reasoning") is not None:
+        reasoning = int(details["reasoning"])
+    if reasoning is None and isinstance(metadata, dict):
+        legacy = metadata.get("token_usage")
+        if isinstance(legacy, dict):
+            completion = legacy.get("completion_tokens_details")
+            if isinstance(completion, dict) and completion.get("reasoning_tokens") is not None:
+                reasoning = int(completion["reasoning_tokens"])
+    return finish_reason, reasoning
+
+
 # --- the wrapper ----------------------------------------------------------------------
+
+
+def _supported_model_kwargs(chat: Any, options: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the call options the installed model declares as fields.
+
+    `with_structured_output(**kwargs)` binds extra options to the model call
+    (`ChatOpenAI` implements `max_tokens` that way and renames it to
+    `max_completion_tokens` on the wire). A test double, or a provider that
+    names the ceiling differently, would otherwise fail the whole call for an
+    optional limit, so unsupported options are dropped and the drop is logged.
+    """
+    fields = getattr(type(chat), "model_fields", None) or {}
+    applied = {name: value for name, value in options.items() if name in fields}
+    for name in sorted(set(options) - set(applied)):
+        logger.info(
+            "structured output option %s is not supported by %s; not applied",
+            name,
+            type(chat).__name__,
+        )
+    return applied
 
 
 class BoundLLMClient:
@@ -476,8 +527,17 @@ class LLMClient:
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> BoundLLMClient:
         return BoundLLMClient(self, self.chat.bind_tools(tools, **kwargs))
 
-    def with_structured_output(self, schema: type[BaseModel]) -> StructuredLLMClient:
-        runnable = self.chat.with_structured_output(schema, include_raw=True)
+    def with_structured_output(self, schema: type[BaseModel], **kwargs: Any) -> StructuredLLMClient:
+        """A structured runnable; `kwargs` are bound to the model (e.g. `max_tokens`).
+
+        The installed chat models pass extra keyword arguments through to the
+        request payload (`ChatOpenAI.with_structured_output` → `bind_tools`), so
+        the output ceiling is enforced by the provider, not by post-processing.
+        Options the installed model does not declare are dropped with a log
+        line: an optional limit must not fail an otherwise valid call.
+        """
+        applied = _supported_model_kwargs(self.chat, kwargs)
+        runnable = self.chat.with_structured_output(schema, include_raw=True, **applied)
         return StructuredLLMClient(self, runnable)
 
     def _secrets(self) -> Sequence[str]:
@@ -578,6 +638,7 @@ class LLMClient:
         if isinstance(response, dict) and response.get("raw") is not None:
             measured = response["raw"]
         input_tokens, output_tokens, total_tokens = _usage_counts(measured)
+        finish_reason, reasoning_tokens = _response_details(measured)
         response_tool_calls = getattr(measured, "tool_calls", None) or []
         record = LLMCallRecord(
             provider=self.provider,
@@ -588,6 +649,8 @@ class LLMClient:
             total_tokens=total_tokens,
             tool_calls=len(response_tool_calls),
             retries=retries,
+            finish_reason=finish_reason,
+            reasoning_tokens=reasoning_tokens,
         )
         self.calls.append(record)
         # Log before enforcing the token budget: the call that exceeds the

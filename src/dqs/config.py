@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     # Sandbox verification is a dbt build over a clone of the project; a hang
     # must end in a verdict, not an orphaned process or schema.
     fix_verify_timeout_seconds: int = 300
+    # Per-call completion ceiling for the fixer. A reasoning model can spend the
+    # whole budget on hidden reasoning and return an empty message (dev run 2),
+    # so the ceiling is explicit, recorded in the results, and bounded.
+    fixer_max_output_tokens: int = 8192
     dqs_seed: int = 42
 
     # Transient provider failures: retry only HTTP 429/5xx (AGENTS.md §7.7).
