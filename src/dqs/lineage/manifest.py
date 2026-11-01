@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any, Final
 
-from dqs.errors import ConfigError, LineageError
+from dqs.errors import ConfigError, LineageError, ManifestRegenerationError
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +83,29 @@ def is_stale(path: Path, project_dir: Path) -> bool:
     return newest is not None and stamp < newest
 
 
+# dbt can print hundreds of lines of header before the real error. Keeping the
+# tail (not a character count) means the error is always in the message even
+# when the first lines are noise.
+DBT_ERROR_TAIL_LINES: Final = 30
+
+
+def dbt_error_excerpt(output: str, *, max_lines: int = DBT_ERROR_TAIL_LINES) -> str:
+    """The last `max_lines` non-empty trailing lines of combined dbt output."""
+    lines = output.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines[-max_lines:])
+
+
 def regenerate(project_dir: Path = PROJECT_DIR) -> None:
     """Run ``dbt compile`` so a fresh manifest with compiled SQL is written.
 
-    Raises LineageError with the dbt excerpt — the caller (CLI) must say
-    clearly that the DAG could not be rebuilt rather than approving a wrong
-    impact report.
+    A failed compile is retried once: dev run 3 lost a scenario to a native
+    CPython crash inside the dbt child that produced no dbt error text at all,
+    and a retry is enough for a transient process-level failure. A second
+    failure raises `ManifestRegenerationError` with the exit code and the last
+    30 lines, which the benchmark classifies as `infra_error`; outside the
+    benchmark the CLI still surfaces it as an explicit error.
     """
     cmd = [
         str(dbt_executable()),
@@ -99,11 +116,27 @@ def regenerate(project_dir: Path = PROJECT_DIR) -> None:
         str(project_dir),
     ]
     logger.info("regenerating manifest: %s", " ".join(cmd))
-    completed = subprocess.run(cmd, capture_output=True, text=True)
-    if completed.returncode != 0:
-        output = completed.stdout + "\n" + completed.stderr
-        excerpt = output[-1500:].strip()
-        raise LineageError(f"dbt compile failed while regenerating the manifest: {excerpt}")
+    for attempt in (1, 2):
+        completed = subprocess.run(cmd, capture_output=True, text=True)
+        if completed.returncode == 0:
+            return
+        excerpt = dbt_error_excerpt(completed.stdout + "\n" + completed.stderr)
+        if attempt == 1:
+            logger.warning(
+                "dbt compile failed (exit code %s); retrying once:\n%s",
+                completed.returncode,
+                excerpt,
+            )
+            continue
+        logger.error(
+            "dbt compile failed after 2 attempts (exit code %s):\n%s",
+            completed.returncode,
+            excerpt,
+        )
+        raise ManifestRegenerationError(
+            "dbt compile failed while regenerating the manifest after 2 attempts "
+            f"(exit code {completed.returncode}); last {DBT_ERROR_TAIL_LINES} lines:\n{excerpt}"
+        )
 
 
 def load_manifest(

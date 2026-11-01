@@ -37,6 +37,15 @@ class LineageError(DqsError):
     """(dbt) lineage cannot be read/built: missing manifest, unknown node, bad SQL."""
 
 
+class ManifestRegenerationError(LineageError):
+    """`dbt compile` failed after the one allowed retry.
+
+    Separate from the other lineage errors because this is an environment/dbt
+    failure, not a wrong manifest or a bad node: the benchmark records it as
+    `infra_error` (excluded from every score) instead of blaming the agent.
+    """
+
+
 class LLMError(DqsError):
     """The LLM provider is unavailable, misconfigured, or returned unusable output."""
 
