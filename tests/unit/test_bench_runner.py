@@ -769,3 +769,23 @@ def test_holdout_refuses_a_changed_fingerprint_unless_acknowledged(
     )
     assert calls == ["f7-orders-total-100"]
     assert run.metadata.acknowledged_changes == "refactored the runner"
+
+
+def test_prompt_token_warning_follows_the_configured_tpm_limit(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dev run 3 warned eight times at --tpm-limit 200000; that is not a risk."""
+    low = _options(tmp_path, tpm_limit=8_000)
+    high = _options(tmp_path, tpm_limit=200_000)
+    assert runner.prompt_token_warning(low, settings) == 6000
+    assert runner.prompt_token_warning(high, settings) == 24000
+
+
+def test_prompt_token_warning_is_overridden_or_disabled_by_settings(
+    settings: Settings, tmp_path: Path
+) -> None:
+    low = _options(tmp_path, tpm_limit=8_000)
+    explicit = settings.model_copy(update={"prompt_token_warn": 12_000})
+    disabled = settings.model_copy(update={"prompt_token_warn": 0})
+    assert runner.prompt_token_warning(low, explicit) == 12000
+    assert runner.prompt_token_warning(low, disabled) == 0

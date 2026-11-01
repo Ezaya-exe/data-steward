@@ -116,8 +116,13 @@ class Settings(BaseSettings):
     fix_verify_timeout_seconds: int = 300
     # Per-call completion ceiling for the fixer. A reasoning model can spend the
     # whole budget on hidden reasoning and return an empty message (dev run 2),
-    # so the ceiling is explicit, recorded in the results, and bounded.
-    fixer_max_output_tokens: int = 8192
+    # so the ceiling is explicit, recorded in the results, and bounded. Dev run
+    # 3 hit 8,192 with 4,132 reasoning tokens and still had no plan; 16,384
+    # leaves room for a plan while staying bounded.
+    fixer_max_output_tokens: int = 16384
+    # Benchmark input-token warning. None derives it from --tpm-limit (24,000
+    # above 10,000 TPM, else 6,000); 0 disables the warning.
+    prompt_token_warn: int | None = None
     dqs_seed: int = 42
 
     # Transient provider failures: retry only HTTP 429/5xx (AGENTS.md §7.7).

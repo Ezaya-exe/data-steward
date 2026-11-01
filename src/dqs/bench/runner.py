@@ -123,6 +123,19 @@ Progress = Callable[[str], None]
 ClientFactory = Callable[[Settings, str, str, float], LLMClient]
 
 
+def prompt_token_warning(options: BenchOptions, settings: Settings) -> int:
+    """Effective input-token warning threshold for this run.
+
+    `PROMPT_TOKEN_WARN` wins when set (0 disables). Otherwise a high-TPM run
+    (above 10,000) gets 24,000: dev run 3 warned eight times at
+    `--tpm-limit 200000`, where those calls are not a rate risk. The default
+    8,000-TPM benchmark keeps the original 6,000.
+    """
+    if settings.prompt_token_warn is not None:
+        return max(0, settings.prompt_token_warn)
+    return 24000 if options.tpm_limit > 10000 else PROMPT_TOKEN_WARNING
+
+
 # --- small deterministic helpers ------------------------------------------------------
 
 
@@ -404,10 +417,11 @@ def execute_scenario(
                 )
                 observation.semantic_passed = semantic
             max_prompt = max((call.input_tokens for call in client.calls), default=0)
-            if max_prompt > PROMPT_TOKEN_WARNING:
+            warning_threshold = prompt_token_warning(options, bench_settings)
+            if warning_threshold and max_prompt > warning_threshold:
                 progress(
                     f"warning: {scenario.id} sent {max_prompt} input tokens in one call "
-                    f"(> {PROMPT_TOKEN_WARNING}); check tool-result compaction"
+                    f"(> {warning_threshold}); check tool-result compaction"
                 )
             observation.tool_calls = tracker.tool_calls
             observation.tokens_in = sum(call.input_tokens for call in client.calls)

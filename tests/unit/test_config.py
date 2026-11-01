@@ -38,6 +38,8 @@ ALL_ENV_VARS = [
     "MAX_TOOL_CALLS",
     "MAX_FIX_ATTEMPTS",
     "MAX_TOKENS_PER_INCIDENT",
+    "FIXER_MAX_OUTPUT_TOKENS",
+    "PROMPT_TOKEN_WARN",
     "INCIDENT_TIMEOUT_SECONDS",
     "DQS_SEED",
     "LANGFUSE_PUBLIC_KEY",
@@ -66,6 +68,8 @@ def test_defaults_from_architecture(clean_env: pytest.MonkeyPatch) -> None:
     assert s.max_tool_calls == 10
     assert s.max_fix_attempts == 3
     assert s.max_tokens_per_incident == 60000
+    assert s.fixer_max_output_tokens == 16384
+    assert s.prompt_token_warn is None  # derived from --tpm-limit unless set
     assert s.incident_timeout_seconds == 900
     assert s.dqs_seed == 42
     # secrets are empty, never fabricated
@@ -77,10 +81,14 @@ def test_environment_overrides_defaults(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("PGPORT", "5434")
     clean_env.setenv("GITHUB_MODE", "live")
     clean_env.setenv("DQS_SEED", "7")
+    clean_env.setenv("FIXER_MAX_OUTPUT_TOKENS", "2048")
+    clean_env.setenv("PROMPT_TOKEN_WARN", "12000")
     s = Settings(_env_file=None)
     assert s.pg_port == 5434
     assert s.github_mode == "live"
     assert s.dqs_seed == 7
+    assert s.fixer_max_output_tokens == 2048
+    assert s.prompt_token_warn == 12000
 
 
 def test_loads_from_env_file(tmp_path: Path) -> None:
