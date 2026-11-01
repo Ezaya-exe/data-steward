@@ -38,7 +38,13 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from dqs.config import LLM_PROVIDERS, Settings, load_settings
-from dqs.errors import BudgetExceeded, ConfigError, DailyQuotaExceeded, LLMError
+from dqs.errors import (
+    BudgetExceeded,
+    ConfigError,
+    DailyQuotaExceeded,
+    LLMError,
+    ManifestRegenerationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -313,19 +319,29 @@ _INFRA_ERROR_RE: Final = re.compile(
     r"\b429\b|rate[\s_-]?limit|ratelimit|quota|too many requests|\blimit\b",
     re.IGNORECASE,
 )
+# A persistent manifest regeneration failure is the environment's problem (the
+# dbt child crashed or cannot parse), never the agent's. The workflow turns the
+# exception into text, so the marker is also matched on the string form.
+_MANIFEST_REGEN_RE: Final = re.compile(
+    r"dbt compile failed while regenerating the manifest", re.IGNORECASE
+)
 
 
 def is_infra_error(error: BaseException | str) -> bool:
-    """True for a rate-limit/quota failure after retries are exhausted.
+    """True for a rate-limit/quota failure or a failed manifest regeneration.
 
     The check is deliberately wider than `is_daily_quota_error`: any 429 status
     or a message that mentions rate/quota/limit/too many requests qualifies.
+    `ManifestRegenerationError` (and its message, after the workflow stringifies
+    it) also qualifies: dev run 3 lost a scenario to a native dbt/CPython crash,
+    which must not be scored as an agent error.
     """
-    if isinstance(error, DailyQuotaExceeded):
+    if isinstance(error, (DailyQuotaExceeded, ManifestRegenerationError)):
         return True
     if isinstance(error, BaseException) and exception_status_code(error) == 429:
         return True
-    return bool(_INFRA_ERROR_RE.search(str(error)))
+    text = str(error)
+    return bool(_MANIFEST_REGEN_RE.search(text) or _INFRA_ERROR_RE.search(text))
 
 
 def is_daily_quota_message(error: BaseException | str) -> bool:
@@ -415,6 +431,38 @@ def _response_details(response: Any) -> tuple[str | None, int | None]:
             if isinstance(completion, dict) and completion.get("reasoning_tokens") is not None:
                 reasoning = int(completion["reasoning_tokens"])
     return finish_reason, reasoning
+
+
+def output_length_exceeded(error: BaseException) -> bool:
+    """True when the provider stopped because the completion ceiling was hit.
+
+    LangChain's OpenAI integration raises `LengthFinishReasonError`; other
+    providers report the same condition in the message. A native finish reason
+    on the exception is honoured when present.
+    """
+    if getattr(error, "finish_reason", None) == "length":
+        return True
+    name = type(error).__name__.lower()
+    text = str(error).lower()
+    return "lengthfinishreasonerror" in name or "length limit was reached" in text
+
+
+def reasoning_tokens_from_error(error: BaseException) -> int | None:
+    """Reasoning tokens reported by a failed call, when the provider exposes them.
+
+    The OpenAI length error carries the original completion on `.completion`;
+    its message also embeds `reasoning_tokens=N`. The attribute is preferred and
+    the message is the fallback, so an older/newer wrapper shape still reports
+    the number instead of losing it.
+    """
+    completion = getattr(error, "completion", None)
+    usage = getattr(completion, "usage", None)
+    details = getattr(usage, "completion_tokens_details", None)
+    value = getattr(details, "reasoning_tokens", None)
+    if isinstance(value, int) and value >= 0:
+        return value
+    match = re.search(r"reasoning_tokens=(\d+)", str(error))
+    return int(match.group(1)) if match else None
 
 
 # --- the wrapper ----------------------------------------------------------------------
@@ -553,14 +601,26 @@ class LLMClient:
         except Exception as exc:  # observability must not break the call
             logger.warning("llm call step-log hook failed: %s", exc)
 
-    def _record_failure(self, started: float, error: str, retries: int, messages: Any) -> None:
+    def _record_failure(
+        self,
+        started: float,
+        error: str,
+        retries: int,
+        messages: Any,
+        *,
+        exc: BaseException | None = None,
+    ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
+        finish_reason = "length" if exc is not None and output_length_exceeded(exc) else None
+        reasoning_tokens = reasoning_tokens_from_error(exc) if exc is not None else None
         record = LLMCallRecord(
             provider=self.provider,
             model=self.model,
             latency_ms=latency_ms,
             retries=retries,
             error=error,
+            finish_reason=finish_reason,
+            reasoning_tokens=reasoning_tokens,
         )
         self.calls.append(record)
         logger.warning(
@@ -588,14 +648,14 @@ class LLMClient:
                     # Daily quota: discard this scenario at the runner, do not
                     # retry. The failure is still recorded so its cost is visible.
                     reason = f"daily LLM quota exhausted: {error}"
-                    self._record_failure(started, reason, retries, messages)
+                    self._record_failure(started, reason, retries, messages, exc=exc)
                     raise DailyQuotaExceeded(reason) from exc
                 if (
                     status is None
                     or status not in RETRYABLE_STATUS_CODES
                     or retries >= self.max_retries
                 ):
-                    self._record_failure(started, error, retries, messages)
+                    self._record_failure(started, error, retries, messages, exc=exc)
                     raise
                 backoff = self.retry_base_seconds * (2**retries)
                 requested = retry_after_seconds(exc)
@@ -605,7 +665,7 @@ class LLMClient:
                         f"retry not attempted: waiting {delay:.1f}s would exceed the "
                         f"{self.max_retry_wait_seconds:.1f}s total retry budget"
                     )
-                    self._record_failure(started, f"{error} ({reason})", retries, messages)
+                    self._record_failure(started, f"{error} ({reason})", retries, messages, exc=exc)
                     raise
                 retries += 1
                 total_wait += delay

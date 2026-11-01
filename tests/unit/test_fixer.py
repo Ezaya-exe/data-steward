@@ -440,6 +440,73 @@ def test_unparseable_model_output_is_counted_and_persisted_as_a_failed_attempt()
     assert persisted == [(1, "null"), (2, "plan")]
 
 
+class LengthFinishReasonError(RuntimeError):
+    """Mirrors the provider error a completion-ceiling stop raises."""
+
+
+def test_cut_off_reply_is_an_invalid_attempt_with_short_plan_feedback() -> None:
+    """Dev run 3 (`f6-order-items-15`): 8,192 tokens, 4,132 of them reasoning.
+
+    The retry must be told, in code-owned feedback, to return a short plan; the
+    failed call's finish reason and reasoning count must be in the step log.
+    """
+    cut_off = LengthFinishReasonError(
+        "Could not parse response content as the length limit was reached - "
+        "CompletionUsage(completion_tokens=8192, "
+        "completion_tokens_details=CompletionTokensDetails(reasoning_tokens=4132))"
+    )
+    chat = ScriptedFixerModel(drafts=[cut_off, _draft()])
+    persisted: list[tuple[int, str]] = []
+    results = iter([_verification(True)])
+
+    def verifier(_settings: Settings, _plan: FixPlan, **_kwargs: Any) -> VerificationResult:
+        return next(results)
+
+    def persister(
+        _engine: Any,
+        _incident_id: Any,
+        attempt_no: int,
+        plan: FixPlan | dict[str, Any] | None,
+        _result: VerificationResult,
+    ) -> int:
+        persisted.append((attempt_no, "plan" if isinstance(plan, FixPlan) else "null"))
+        return attempt_no
+
+    incident = _incident()
+    client = _client(chat)
+    sink = _sink()
+    result = plan_fix(
+        incident,
+        _root_cause(),
+        _impact(incident),
+        client=client,
+        sink=sink,
+        settings=SETTINGS,
+        max_attempts=2,
+        candidates=_candidates(),
+        verifier=verifier,
+        persister=persister,
+    )
+
+    assert result.passed is True
+    assert result.attempts_used == 2
+    first = result.attempts[0]
+    assert first.plan is None
+    assert first.final_channel == "invalid"
+    assert first.verification.failed_criteria == ["fixer_output_invalid"]
+    detail = first.verification.criteria[0].detail
+    assert "your reply was cut off; return only a short plan with minimal edits" in detail
+    # The feedback reached the second attempt's context (the human message).
+    assert "your reply was cut off" in chat.seen_messages[1][1]
+    assert persisted == [(1, "null"), (2, "plan")]
+    # The failed call is recorded with the provider's stop reason.
+    assert client.calls[0].finish_reason == "length"
+    assert client.calls[0].reasoning_tokens == 4132
+    result_steps = [step for step in sink.records if step.name == "fix_attempt_result"]
+    assert result_steps[0].output["finish_reason"] == "length"
+    assert result_steps[0].output["reasoning_tokens"] == 4132
+
+
 def test_model_schema_cannot_choose_incident_context() -> None:
     with pytest.raises(ValidationError):
         FixPlanDraft.model_validate(

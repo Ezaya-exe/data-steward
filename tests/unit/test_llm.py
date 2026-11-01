@@ -6,6 +6,7 @@ tests (AGENTS.md §7.9); benchmark numbers are never taken from it.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -23,11 +24,20 @@ from dqs.agents.llm import (
     _supported_model_kwargs,
     get_llm,
     is_daily_quota_error,
+    is_infra_error,
+    output_length_exceeded,
+    reasoning_tokens_from_error,
     redact_secrets,
 )
 from dqs.agents.smoke import run_smoke
 from dqs.config import Settings
-from dqs.errors import BudgetExceeded, ConfigError, DailyQuotaExceeded
+from dqs.errors import (
+    BudgetExceeded,
+    ConfigError,
+    DailyQuotaExceeded,
+    LineageError,
+    ManifestRegenerationError,
+)
 
 
 @pytest.fixture
@@ -462,6 +472,68 @@ def test_response_details_reads_the_openai_compatible_reasoning_counter() -> Non
 
 def test_response_details_is_empty_for_a_plain_message() -> None:
     assert _response_details(AIMessage(content="plain")) == (None, None)
+
+
+class LengthFinishReasonError(RuntimeError):
+    """Mirrors the OpenAI/LangChain exception name the fixer sees."""
+
+    def __init__(self, message: str, reasoning: int | None = 4132) -> None:
+        super().__init__(message)
+        self.completion = (
+            None
+            if reasoning is None
+            else SimpleNamespace(
+                usage=SimpleNamespace(
+                    completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning)
+                )
+            )
+        )
+
+
+def test_length_error_is_recognised_and_its_reasoning_tokens_read() -> None:
+    length_error = LengthFinishReasonError(
+        "Could not parse response content as the length limit was reached"
+    )
+    assert output_length_exceeded(length_error)
+    assert reasoning_tokens_from_error(length_error) == 4132
+    assert not output_length_exceeded(RuntimeError("provider returned no answer"))
+    assert reasoning_tokens_from_error(RuntimeError("provider returned no answer")) is None
+
+
+def test_reasoning_tokens_fall_back_to_the_error_message() -> None:
+    error = LengthFinishReasonError(
+        "length limit was reached - CompletionUsage(reasoning_tokens=1234)", reasoning=None
+    )
+    assert reasoning_tokens_from_error(error) == 1234
+
+
+def test_failed_length_call_records_the_finish_reason_and_reasoning_tokens() -> None:
+    """The failed call must be as visible as a successful one (dev run 3)."""
+    error = LengthFinishReasonError(
+        "Could not parse response content as the length limit was reached"
+    )
+    client = _flaky_client(_FlakyRunnable([error]))
+    seen: list[LLMCallRecord] = []
+    client.on_call = lambda record, _response, _messages: seen.append(record)
+
+    with pytest.raises(LengthFinishReasonError):
+        client.invoke("hello")
+
+    assert client.calls[-1].finish_reason == "length"
+    assert client.calls[-1].reasoning_tokens == 4132
+    assert seen[-1].finish_reason == "length"
+    assert seen[-1].reasoning_tokens == 4132
+
+
+def test_manifest_regeneration_failure_is_an_infrastructure_error() -> None:
+    error = ManifestRegenerationError(
+        "dbt compile failed while regenerating the manifest after 2 attempts "
+        "(exit code 3221225477); last 30 lines: ..."
+    )
+    assert is_infra_error(error)
+    # The workflow stores the error as text, so the string form must also match.
+    assert is_infra_error(f"ManifestRegenerationError: {error}")
+    assert not is_infra_error(LineageError("manifest at x contains no nodes"))
 
 
 def test_unsupported_structured_output_options_are_dropped_not_raised() -> None:

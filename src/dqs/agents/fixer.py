@@ -39,6 +39,7 @@ from dqs.agents.llm import (
     LLMCallRecord,
     LLMClient,
     RetryRecord,
+    output_length_exceeded,
     redact_secrets,
     settings_secrets,
 )
@@ -70,6 +71,9 @@ PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "fixer.md"
 CONTRACTS_DIR = Path(__file__).resolve().parents[3] / "contracts"
 MAX_DETAIL_CHARS = 1200
 MAX_CONTEXT_SUMMARY = 500
+# Code-owned retry feedback: the prompt file is frozen, but a reply that hit the
+# completion ceiling still needs a precise correction on the next attempt.
+CUT_OFF_FEEDBACK = "your reply was cut off; return only a short plan with minimal edits"
 
 Verifier = Callable[..., VerificationResult]
 Persister = Callable[
@@ -422,9 +426,13 @@ def _invalid_reply_detail(exc: BaseException, settings: Settings) -> str:
     """A redacted, bounded reason for a reply that produced no usable plan.
 
     The provider text can quote a key and can be several kilobytes long; only
-    the redacted head is stored in `dq.fix_attempts` and the step log.
+    the redacted head is stored in `dq.fix_attempts` and the step log. A
+    length-limited reply gets explicit, code-owned feedback for the retry.
     """
-    raw = f"the model did not return a schema-valid fix plan: {type(exc).__name__}: {exc}"
+    if output_length_exceeded(exc):
+        raw = f"{CUT_OFF_FEEDBACK} (finish_reason=length; {type(exc).__name__})"
+    else:
+        raw = f"the model did not return a schema-valid fix plan: {type(exc).__name__}: {exc}"
     return redact_secrets(raw, secrets=settings_secrets(settings))[:MAX_DETAIL_CHARS]
 
 
@@ -501,6 +509,16 @@ def plan_attempt(
         failed = _rejected_result("fixer_output_invalid", detail)
         if engine is not None or persister is not None:
             (persister or _default_persist)(engine, incident.incident_id, attempt_no, None, failed)
+        # The failed call is already in `client.calls`; surface the provider's
+        # finish reason here too, because this attempt never reaches verify_fix.
+        last_call = getattr(client, "calls", None)
+        call_details: dict[str, Any] = {}
+        if last_call:
+            record = last_call[-1]
+            if record.finish_reason is not None:
+                call_details["finish_reason"] = record.finish_reason
+            if record.reasoning_tokens is not None:
+                call_details["reasoning_tokens"] = record.reasoning_tokens
         sink.record(
             kind="system",
             name="fix_attempt_result",
@@ -510,6 +528,7 @@ def plan_attempt(
                 "failed_criteria": failed.failed_criteria,
                 "reason": detail,
                 "plan_stored": False,
+                **call_details,
             },
         )
         return PlanAttempt(
