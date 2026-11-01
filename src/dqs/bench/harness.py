@@ -26,7 +26,7 @@ FIXER_PROMPT: Final = REPO_ROOT / "src" / "dqs" / "agents" / "prompts" / "fixer.
 # Phase 8b: fingerprint provenance, infra-error handling, token ledger, repeats.
 # 8c.1: batch-scoped detection, non-coercing fix metrics, step summary, rescore.
 # 8c.2: null-plan fix attempts, fixer output ceiling, finish_reason/reasoning log.
-HARNESS_VERSION: Final = "8c.2"
+HARNESS_VERSION: Final = "8c.3"
 
 # Files whose content can change a benchmark result. The hash is deliberately
 # broader than `HARNESS_VERSION`: it covers every agent/tool/verification/workflow

@@ -1,11 +1,37 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: 2026-10-31 (dev-run-2 analysis; null-plan fix attempts and fixer output ceiling; harness `8c.2`; no benchmark)
+Last updated: 2026-11-01 (dev-run-3 analysis; dbt error capture/retry, fixer ceiling, prompt-warning config; harness `8c.3`; no benchmark)
 · Do not treat this file as a spec; AGENTS.md is rules, docs/PHASES.md is order,
 docs/ARCHITECTURE.md is design.
 
 ## Current state
 
+- **Dev run 3 was analysed read-only and its harness gaps were fixed (`8c.3`).**
+  Analysis: `docs/review/dev-run-3-analysis.md` (source
+  `benchmarks/results/20261031T115043Z_deepseek-deepseek-v4.1-flash.json`,
+  harness `8c.2`, **dirty worktree `b1e475f`**). Run 3 scored detection 37/37,
+  RC category 35/37, columns 27/27, resolution 33/37, fixes delivered 9/13,
+  verifier pass 9/11, semantic 9/9, verified-but-wrong 0/9, control FP 0/6,
+  `errors=1`, `infra=0`, 1,105,668 tokens, 3,584.0 s. The seven lines under
+  "Scenarios to look at" are **six unique scenarios**: two diagnosis misses
+  (`f2-customers-email` timed out empty, `f2-payments-amount` followed the
+  known column-removal NULL evidence), one wall-clock casualty
+  (`f1-orders-status`), two fixer anchor-formatting failures
+  (`f6-orders-03`, `f6-order-items-05`) and one native CPython/dbt crash
+  (`f6-order-items-03`, WER `0xc0000005` in the dbt child). **No verifier or
+  fixer-context flaw was found**, so the F6 failures are fixer capability and
+  the prompts stay frozen.
+- **Harness `8c.3` (this session, no benchmark run).** `dbt compile` failures
+  are retried once, then raise `ManifestRegenerationError` with the exit code and
+  the last 30 lines; the benchmark records that as `infra_error` (excluded from
+  every denominator, re-run on `--resume`) while the CLI still surfaces it as an
+  explicit error. `FIXER_MAX_OUTPUT_TOKENS` is now 16,384; a reply stopped at the
+  ceiling is an invalid attempt whose code-owned feedback says "your reply was
+  cut off; return only a short plan with minimal edits", and failed calls record
+  `finish_reason` + `reasoning_tokens`. `PROMPT_TOKEN_WARN` (0 disables) is the
+  benchmark input-token warning; unset means 24,000 above 10,000 TPM, else 6,000.
+  DECISIONS 164-168. Lint, mypy, the unit suite (748 passed) and the
+  integration suite (100 passed, 6 real-LLM skips) are green.
 - **The newest full dev run was analysed read-only, and the fixer-failure path
   it exposed was hardened (`8c.2`).** Analysis:
   `docs/review/dev-run-2-analysis.md` (source
@@ -25,18 +51,22 @@ docs/ARCHITECTURE.md is design.
   `load_latest_fix_attempt` returns a typed `StoredFixAttempt` (a null plan is
   normal) and `run_dry_run` accepts `FixPlan | None` (returns `None`, writes no
   preview) instead of raising, so the publisher, issue builder, PR body, UI
-  service layer and benchmark runner all tolerate it. The fixer completion is
-  capped by `FIXER_MAX_OUTPUT_TOKENS` (default 8192), and every model call
-  records `finish_reason` + `reasoning_tokens`. Cost wording is now "estimated
-  at list price; actual billing depends on the provider". DECISIONS 156–163.
+  service layer and benchmark runner all tolerate it. The fixer completion
+  ceiling was introduced here (`FIXER_MAX_OUTPUT_TOKENS`, then 8192; `8c.3`
+  raised it to 16,384), and every model call records `finish_reason` +
+  `reasoning_tokens`. Cost wording is now "estimated
+  at list price; actual billing depends on the provider". DECISIONS 156-163.
 - **Left unfixed on purpose (owner decision, not in this pass):**
   `route_after_verification` checks `budget_exceeded` **before**
   `verification_passed`, so a verified fix is filed as an ISSUE whenever the
   investigator hit the tool ceiling (`f6-order-items-15`). Also deferred:
   `get_batch_profile` reporting a header-absent column as `null_rate=1.0`
-  (`f2-customers-email`) and the `required_in_batch: true` contract for the
-  day-1-only `raw.products` dimension (`f5-order-items-product-35`). All three
-  are documented in the analysis above.
+  (`f2-customers-email`), the `required_in_batch: true` contract for the
+  day-1-only `raw.products` dimension (`f5-order-items-product-35`), the
+  wall-clock budget that cannot interrupt an in-flight provider call
+  (`f2-customers-email` in run 3), and the `column_removed` fixture ambiguity
+  (physical NULL column vs header absence; `f2-payments-amount` in run 3).
+  All are documented in the two analysis files above.
 - **Phase 8c work is implemented, verified and ready for owner review (scoring
   corrections, cap diagnosis, investigator fix).** Report:
   `docs/phase-notes/phase-8c.md`. Detection now matches
@@ -662,7 +692,7 @@ Entry point: the `dqs` console script (`.venv\Scripts\dqs.exe`); it exists becau
   hash covers generator + contracts + dbt content, not `sim/loader.py`; a hard
   kill can leave one `dqs_bench_*` DB (the next run drops it). Daily-quota
   detection is provider-text based; prompts are frozen (unchanged since harness
-  `8c.1`; the harness is now `8c.2`, so the code fingerprint differs from that
+  `8c.1`; the harness is now `8c.3`, so the code fingerprint differs from that
   run).
 - A benchmark results file is one model/provider per file (`--resume` refuses a
   mismatch). Holdout requires `--confirm-holdout` and must not guide prompt

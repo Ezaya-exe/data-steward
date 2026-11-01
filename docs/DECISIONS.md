@@ -1113,3 +1113,52 @@ entry each; newest last.
      and `get_batch_profile` reporting a header-absent column as
      `null_rate=1.0` for `f2-customers-email`, are documented in
      `docs/review/dev-run-2-analysis.md` but not changed here.
+164. **A failed manifest regeneration is retried once and then classified as
+     infrastructure.** `manifest.regenerate` runs `dbt compile`; on a non-zero
+     exit it logs the failure and retries once, and a second failure raises
+     `ManifestRegenerationError` (a `LineageError` subclass) carrying the exit
+     code. `is_infra_error` recognises both the exception and its string form, so
+     the benchmark records `infra_error`, excludes the scenario from every
+     denominator and re-runs it on `--resume`; outside the benchmark the CLI keeps
+     raising it as an explicit error (the DAG is still not silently guessed).
+     Reason: dev run 3 lost `f6-order-items-03` to a native CPython access
+     violation in the dbt child (`0xc0000005`, `python312.dll`, WER report
+     `6719a71c-…`, `dbt_extractor.pyd` loaded) that printed only three header
+     lines. A retry is the cheapest correct response to a transient process
+     failure; a permanent one is the environment's fault, not the agent's.
+165. **The dbt failure message keeps the last 30 lines plus the exit code.**
+     `dbt_error_excerpt` trims trailing blank lines and keeps the tail, not a
+     character count, because the real dbt error is at the end of a long header
+     while the 8c.2 `output[-1500:]` slice was dominated by startup noise.
+     Reason: dev run 3's message contained only the three header lines and no
+     error text at all, which made the cause unrecoverable from the results file.
+166. **`FIXER_MAX_OUTPUT_TOKENS` defaults to 16,384 and a cut-off reply gets
+     code-owned retry feedback.** The prompt file is unchanged. A reply that
+     stops at the completion ceiling is still an invalid attempt with
+     `plan = NULL` and criterion `fixer_output_invalid`, but its detail says
+     "your reply was cut off; return only a short plan with minimal edits" so the
+     next attempt is corrected. `LLMCallRecord` now records `finish_reason` and
+     `reasoning_tokens` on failed calls too, and the fixer writes them on the
+     invalid-attempt step log. Reason: dev run 3's only cut-off
+     (`f6-order-items-15` attempt 1) burned all 8,192 tokens, 4,132 of them
+     reasoning, and returned no plan; the retry then worked. 8,192 left no room
+     for the plan itself.
+167. **The benchmark prompt-token warning follows the configured rate.**
+     `PROMPT_TOKEN_WARN` (Settings, 0 disables) is the explicit override;
+     otherwise the threshold is 24,000 when `--tpm-limit` is above 10,000 and
+     6,000 at or below it. Reason: dev run 3 emitted the 6,000-token warning for
+     eight scenarios while running `--tpm-limit 200000`, where those calls are
+     well inside the configured rate; the warning is meant to flag uncompacted
+     tool results, not normal high-throughput prompts.
+168. **`HARNESS_VERSION` is `8c.3`.** The change covers the manifest retry/infra
+     classification, the 30-line dbt excerpt, the raised fixer ceiling with
+     cut-off feedback, and the configurable prompt-token warning. The
+     investigator/fixer prompts, verifier, scoring, scenarios, oracle and
+     injectors are untouched. The dev-run-3 analysis
+     (`docs/review/dev-run-3-analysis.md`) found **no verifier or fixer-context
+     flaw**: the exact-match rejections were correct and the candidate SQL was
+     supplied verbatim, so the F6 failures are fixer capability. The wall-clock
+     limit still cannot interrupt an in-flight provider call, the
+     `route_after_verification` ordering (budget before verified) stays latent,
+     and the `column_removed` fixture ambiguity remains out of scope — all three
+     are recorded in the review, none is changed here.
